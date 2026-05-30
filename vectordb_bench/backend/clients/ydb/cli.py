@@ -171,6 +171,16 @@ class YDBTypedDict(CommonTypedDict):
             help="AUTO_PARTITIONING_PARTITION_SIZE_MB for vector index internal tables",
         ),
     ]
+    operation_timeout_seconds: Annotated[
+        int,
+        click.option(
+            "--operation-timeout-seconds",
+            type=int,
+            default=24 * 3600,
+            show_default=True,
+            help="YDB RPC/operation timeout for long DDL (ADD INDEX, ALTER TABLE, DROP TABLE)",
+        ),
+    ]
 
 
 @cli.command()
@@ -196,6 +206,7 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             auto_partitioning_min_partitions_count=parameters["auto_partitioning_min_partitions_count"],
             auto_partitioning_max_partitions_count=parameters["auto_partitioning_max_partitions_count"],
             auto_partitioning_partition_size_mb=parameters["auto_partitioning_partition_size_mb"],
+            operation_timeout_seconds=parameters["operation_timeout_seconds"],
         ),
         db_case_config=YDBIndexConfig(
             levels=parameters["levels"],

@@ -25,6 +25,7 @@ YDB_CREDENTIAL_ENV_KEYS = (
 YDB_LABEL_FIELD = "labels"
 YDB_INDEX_WAIT_POLL_SECONDS = 5
 YDB_INDEX_WAIT_TIMEOUT_SECONDS = 7200
+YDB_DEFAULT_OPERATION_TIMEOUT_SECONDS = 24 * 3600
 YDB_INDEX_IMPL_LEVEL_TABLE = "indexImplLevelTable"
 YDB_INDEX_IMPL_POSTING_TABLE = "indexImplPostingTable"
 YDB_INDEX_IMPL_PREFIX_TABLE = "indexImplPrefixTable"
@@ -153,6 +154,22 @@ class YDB(VectorDB):
         log.debug("No YDB credentials in env; using anonymous auth for local server")
         return ydb.AnonymousCredentials()
 
+    @staticmethod
+    def _operation_timeout_seconds(db_config: dict) -> int:
+        return int(db_config.get("operation_timeout_seconds", YDB_DEFAULT_OPERATION_TIMEOUT_SECONDS))
+
+    @classmethod
+    def _operation_settings(cls, db_config: dict):
+        import ydb
+
+        timeout = cls._operation_timeout_seconds(db_config)
+        return (
+            ydb.BaseRequestSettings()
+            .with_timeout(timeout)
+            .with_operation_timeout(timeout)
+            .with_cancel_after(timeout)
+        )
+
     @contextmanager
     def _session_pool(self):
         import ydb
@@ -188,7 +205,10 @@ class YDB(VectorDB):
                 self.driver = None
 
     def _drop_table(self, pool) -> None:
-        pool.execute_with_retries(f"DROP TABLE IF EXISTS `{self.table_name}`")
+        pool.execute_with_retries(
+            f"DROP TABLE IF EXISTS `{self.table_name}`",
+            settings=self._operation_settings(self.db_config),
+        )
         log.info("Dropped table %s", self.table_name)
 
     def _partition_count_settings_sql(self) -> str:
@@ -240,7 +260,8 @@ class YDB(VectorDB):
                 SET (
                     {settings_sql}
                 );
-                """
+                """,
+                settings=self._operation_settings(self.db_config),
             )
             log.info("Configured auto partitioning for YDB index table %s", table_path)
 
@@ -254,7 +275,8 @@ class YDB(VectorDB):
                 embedding String NOT NULL{label_column},
                 PRIMARY KEY (id)
             ){with_clause};
-            """
+            """,
+            settings=self._operation_settings(self.db_config),
         )
         log.info(
             "Created table %s (with_scalar_labels=%s, auto_partitioning_min=%s, auto_partitioning_max=%s)",
@@ -281,6 +303,7 @@ class YDB(VectorDB):
         cover_clause = index_param.get("cover_clause", "")
         cover_sql = f" {cover_clause}" if cover_clause else ""
 
+        ddl_settings = self._operation_settings(self.db_config)
         pool.execute_with_retries(
             f"""
             ALTER TABLE `{self.table_name}`
@@ -295,7 +318,8 @@ class YDB(VectorDB):
                 clusters={clusters},
                 overlap_clusters={overlap_clusters}
             );
-            """
+            """,
+            settings=ddl_settings,
         )
 
         table_path = f"{self.driver._driver_config.database}/{self.table_name}"
@@ -308,6 +332,7 @@ class YDB(VectorDB):
                     replace_destination=True,
                 ),
             ],
+            settings=ddl_settings,
         )
         log.info(
             "Created vector index %s on %s ON (%s)%s (levels=%d, clusters=%d)",

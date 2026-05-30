@@ -20,6 +20,7 @@ class YDBConfigDict(TypedDict, total=False):
     auto_partitioning_min_partitions_count: int
     auto_partitioning_max_partitions_count: int
     auto_partitioning_partition_size_mb: int
+    operation_timeout_seconds: int
 
 
 class YDBConfig(DBConfig):
@@ -38,6 +39,7 @@ class YDBConfig(DBConfig):
     auto_partitioning_min_partitions_count: int = 1000
     auto_partitioning_max_partitions_count: int = 1100
     auto_partitioning_partition_size_mb: int = 1000
+    operation_timeout_seconds: int = 24 * 3600
 
     @model_validator(mode="after")
     def validate_partition_bounds(self) -> "YDBConfig":
@@ -75,6 +77,7 @@ class YDBConfig(DBConfig):
             "auto_partitioning_min_partitions_count": self.auto_partitioning_min_partitions_count,
             "auto_partitioning_max_partitions_count": self.auto_partitioning_max_partitions_count,
             "auto_partitioning_partition_size_mb": self.auto_partitioning_partition_size_mb,
+            "operation_timeout_seconds": self.operation_timeout_seconds,
         }
         if self.table_name:
             result["table_name"] = self.table_name

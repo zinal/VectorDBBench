@@ -87,6 +87,13 @@ class TestYDBConfig:
         assert cfg.auto_partitioning_max_partitions_count == 1100
         assert cfg.auto_partitioning_partition_size_mb == 1000
         assert cfg.table_name == ""
+        assert cfg.operation_timeout_seconds == 24 * 3600
+
+    def test_operation_settings_timeout(self):
+        settings = YDB._operation_settings({"operation_timeout_seconds": 7200})
+        assert settings.timeout == 7200
+        assert settings.operation_timeout == 7200
+        assert settings.cancel_after == 7200
 
     def test_empty_table_name_allowed(self):
         cfg = YDBConfig(table_name="")
