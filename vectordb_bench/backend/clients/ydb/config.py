@@ -22,7 +22,7 @@ class YDBConfigDict(TypedDict, total=False):
 
 
 class YDBConfig(DBConfig):
-    _extra_empty_skip: ClassVar[frozenset[str]] = frozenset({"password", "token", "user"})
+    _extra_empty_skip: ClassVar[frozenset[str]] = frozenset({"password", "token", "user", "table_name"})
 
     endpoint: str = "grpc://localhost:2136"
     database: str = "/local"

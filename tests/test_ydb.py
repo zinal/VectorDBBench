@@ -86,6 +86,11 @@ class TestYDBConfig:
         assert cfg.auto_partitioning_min_partitions_count == 1000
         assert cfg.auto_partitioning_max_partitions_count == 1100
         assert cfg.auto_partitioning_partition_size_mb == 1000
+        assert cfg.table_name == ""
+
+    def test_empty_table_name_allowed(self):
+        cfg = YDBConfig(table_name="")
+        assert cfg.table_name == ""
 
     def test_auto_partitioning_bounds_validation(self):
         with pytest.raises(ValueError, match="auto_partitioning_min_partitions_count"):
