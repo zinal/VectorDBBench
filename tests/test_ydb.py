@@ -210,6 +210,7 @@ class TestYDBAuth:
     def test_build_credentials_login_from_env(self, monkeypatch):
         monkeypatch.setenv("YDB_USER", "bench")
         monkeypatch.setenv("YDB_PASSWORD", "secret")
+        monkeypatch.delenv("YDB_SSL_ROOT_CERTIFICATES_FILE", raising=False)
 
         with patch("ydb.StaticCredentials") as static_credentials, patch("ydb.DriverConfig") as driver_config_cls:
             YDB._build_credentials(
@@ -221,6 +222,7 @@ class TestYDBAuth:
     def test_build_credentials_login_mode_cli_overrides_env(self, monkeypatch):
         monkeypatch.setenv("YDB_USER", "env-user")
         monkeypatch.setenv("YDB_PASSWORD", "env-pass")
+        monkeypatch.delenv("YDB_SSL_ROOT_CERTIFICATES_FILE", raising=False)
 
         with patch("ydb.StaticCredentials") as static_credentials, patch("ydb.DriverConfig") as driver_config_cls:
             YDB._build_credentials(
@@ -252,10 +254,58 @@ class TestYDBAuth:
         monkeypatch.delenv("YDB_OAUTH2_KEY_FILE", raising=False)
         monkeypatch.delenv("YDB_ANONYMOUS_CREDENTIALS", raising=False)
         monkeypatch.delenv("YDB_METADATA_CREDENTIALS", raising=False)
+        monkeypatch.delenv("YDB_SSL_ROOT_CERTIFICATES_FILE", raising=False)
 
         with patch("ydb.AnonymousCredentials") as anonymous_credentials:
             YDB._build_credentials({"auth_mode": "env", "user": "", "password": ""})
             anonymous_credentials.assert_called_once_with()
+
+
+class TestYDBSSL:
+    def test_ssl_root_certificates_from_env(self, monkeypatch, tmp_path):
+        cert_file = tmp_path / "ca.pem"
+        cert_file.write_bytes(b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n")
+        monkeypatch.setenv("YDB_SSL_ROOT_CERTIFICATES_FILE", str(cert_file))
+
+        db_config = {
+            "endpoint": "grpcs://ydb.example.com:2135",
+            "database": "/Root/db",
+        }
+        loaded = YDB._load_root_certificates(db_config)
+        assert loaded == cert_file.read_bytes()
+
+    def test_ssl_root_certificates_from_db_config(self, tmp_path):
+        cert_file = tmp_path / "ca.pem"
+        cert_file.write_bytes(b"pem-bytes")
+        db_config = {
+            "endpoint": "grpcs://ydb.example.com:2135",
+            "database": "/Root/db",
+            "ssl_root_certificates_file": str(cert_file),
+        }
+        assert YDB._load_root_certificates(db_config) == b"pem-bytes"
+
+    def test_driver_config_includes_root_certificates(self, tmp_path):
+        cert_file = tmp_path / "ca.pem"
+        cert_file.write_bytes(b"pem-bytes")
+        db_config = {
+            "endpoint": "grpcs://ydb.example.com:2135",
+            "database": "/Root/db",
+            "ssl_root_certificates_file": str(cert_file),
+        }
+        with patch("ydb.DriverConfig") as driver_config_cls:
+            YDB._driver_config(db_config)
+            driver_config_cls.assert_called_once_with(
+                endpoint="grpcs://ydb.example.com:2135",
+                database="/Root/db",
+                root_certificates=b"pem-bytes",
+            )
+
+    def test_ydb_config_reads_ssl_env(self, monkeypatch, tmp_path):
+        cert_file = tmp_path / "ca.pem"
+        cert_file.write_text("dummy")
+        monkeypatch.setenv("YDB_SSL_ROOT_CERTIFICATES_FILE", str(cert_file))
+        cfg = YDBConfig()
+        assert cfg.ssl_root_certificates_file == str(cert_file)
 
     def test_build_credentials_env_uses_sdk_when_configured(self, monkeypatch):
         monkeypatch.delenv("YDB_USER", raising=False)

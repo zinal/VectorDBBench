@@ -16,13 +16,16 @@ class YDBConfigDict(TypedDict, total=False):
     user: str
     password: str
     table_name: str
+    ssl_root_certificates_file: str
     auto_partitioning_min_partitions_count: int
     auto_partitioning_max_partitions_count: int
     auto_partitioning_partition_size_mb: int
 
 
 class YDBConfig(DBConfig):
-    _extra_empty_skip: ClassVar[frozenset[str]] = frozenset({"password", "token", "user", "table_name"})
+    _extra_empty_skip: ClassVar[frozenset[str]] = frozenset(
+        {"password", "token", "user", "table_name", "ssl_root_certificates_file"}
+    )
 
     endpoint: str = "grpc://localhost:2136"
     database: str = "/local"
@@ -31,6 +34,7 @@ class YDBConfig(DBConfig):
     user: str = ""
     password: SecretStr | None = None
     table_name: str = ""
+    ssl_root_certificates_file: str = ""
     auto_partitioning_min_partitions_count: int = 1000
     auto_partitioning_max_partitions_count: int = 1100
     auto_partitioning_partition_size_mb: int = 1000
@@ -54,6 +58,8 @@ class YDBConfig(DBConfig):
             data["endpoint"] = os.environ["YDB_ENDPOINT"]
         if not data.get("database") and os.environ.get("YDB_DATABASE"):
             data["database"] = os.environ["YDB_DATABASE"]
+        if not data.get("ssl_root_certificates_file") and os.environ.get("YDB_SSL_ROOT_CERTIFICATES_FILE"):
+            data["ssl_root_certificates_file"] = os.environ["YDB_SSL_ROOT_CERTIFICATES_FILE"]
         return data
 
     def to_dict(self) -> YDBConfigDict:
@@ -72,6 +78,8 @@ class YDBConfig(DBConfig):
         }
         if self.table_name:
             result["table_name"] = self.table_name
+        if self.ssl_root_certificates_file:
+            result["ssl_root_certificates_file"] = self.ssl_root_certificates_file
         return result
 
 

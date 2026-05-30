@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 
 YDB_USER_ENV = "YDB_USER"
 YDB_PASSWORD_ENV = "YDB_PASSWORD"
+YDB_SSL_ROOT_CERTIFICATES_FILE_ENV = "YDB_SSL_ROOT_CERTIFICATES_FILE"
 YDB_CREDENTIAL_ENV_KEYS = (
     "YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS",
     YDB_USER_ENV,
@@ -91,6 +92,40 @@ class YDB(VectorDB):
         return os.environ.get("YDB_METADATA_CREDENTIALS", "0") == "1"
 
     @staticmethod
+    def _ssl_root_certificates_path(db_config: dict) -> str | None:
+        path = db_config.get("ssl_root_certificates_file") or os.environ.get(YDB_SSL_ROOT_CERTIFICATES_FILE_ENV)
+        return path or None
+
+    @staticmethod
+    def _load_root_certificates(db_config: dict) -> bytes | None:
+        import ydb
+
+        path = YDB._ssl_root_certificates_path(db_config)
+        if not path:
+            return None
+        root_certificates = ydb.load_ydb_root_certificate(path)
+        if root_certificates is None:
+            log.warning("YDB SSL root certificate file not found: %s", path)
+            return None
+        log.info("Using YDB SSL root certificate from %s", path)
+        return root_certificates
+
+    @staticmethod
+    def _driver_config(db_config: dict, credentials=None):
+        import ydb
+
+        kwargs: dict[str, Any] = {
+            "endpoint": db_config["endpoint"],
+            "database": db_config.get("database"),
+        }
+        root_certificates = YDB._load_root_certificates(db_config)
+        if root_certificates is not None:
+            kwargs["root_certificates"] = root_certificates
+        if credentials is not None:
+            kwargs["credentials"] = credentials
+        return ydb.DriverConfig(**kwargs)
+
+    @staticmethod
     def _build_credentials(db_config: dict):
         import ydb
 
@@ -109,10 +144,7 @@ class YDB(VectorDB):
             if not user:
                 msg = f"auth_mode=login requires --user or ${YDB_USER_ENV}"
                 raise ValueError(msg)
-            driver_config = ydb.DriverConfig(
-                endpoint=db_config["endpoint"],
-                database=db_config.get("database"),
-            )
+            driver_config = YDB._driver_config(db_config)
             return ydb.StaticCredentials(driver_config, user, password)
 
         if YDB._has_sdk_credentials_env():
@@ -126,11 +158,7 @@ class YDB(VectorDB):
         import ydb
 
         credentials = self._build_credentials(self.db_config)
-        driver = ydb.Driver(
-            endpoint=self.db_config["endpoint"],
-            database=self.db_config["database"],
-            credentials=credentials,
-        )
+        driver = ydb.Driver(driver_config=self._driver_config(self.db_config, credentials))
         pool = None
         try:
             driver.wait(timeout=5, fail_fast=True)
@@ -146,11 +174,7 @@ class YDB(VectorDB):
         import ydb
 
         credentials = self._build_credentials(self.db_config)
-        self.driver = ydb.Driver(
-            endpoint=self.db_config["endpoint"],
-            database=self.db_config["database"],
-            credentials=credentials,
-        )
+        self.driver = ydb.Driver(driver_config=self._driver_config(self.db_config, credentials))
         self.driver.wait(timeout=5, fail_fast=True)
         self.pool = ydb.QuerySessionPool(self.driver)
         try:

@@ -130,6 +130,17 @@ class YDBTypedDict(CommonTypedDict):
             help="YDB table name (auto-generated per case if omitted)",
         ),
     ]
+    ssl_root_certificates_file: Annotated[
+        str,
+        click.option(
+            "--ssl-root-certificates-file",
+            type=str,
+            default="",
+            show_default=False,
+            envvar="YDB_SSL_ROOT_CERTIFICATES_FILE",
+            help="Path to PEM file with YDB server root CA (required for grpcs://)",
+        ),
+    ]
     auto_partitioning_min_partitions_count: Annotated[
         int,
         click.option(
@@ -181,6 +192,7 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             user=parameters["user"],
             password=SecretStr(password) if password else None,
             table_name=parameters["table_name"],
+            ssl_root_certificates_file=parameters["ssl_root_certificates_file"],
             auto_partitioning_min_partitions_count=parameters["auto_partitioning_min_partitions_count"],
             auto_partitioning_max_partitions_count=parameters["auto_partitioning_max_partitions_count"],
             auto_partitioning_partition_size_mb=parameters["auto_partitioning_partition_size_mb"],
