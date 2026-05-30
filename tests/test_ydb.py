@@ -63,8 +63,14 @@ class TestYDBConfig:
 
         cfg = YDBIndexConfig()
         assert cfg.index_on_columns(non_filter) == ("embedding",)
+        assert cfg.index_on_columns(non_filter, with_scalar_labels=True) == ("labels", "embedding")
         assert cfg.index_on_columns(IntFilter(int_value=100, filter_rate=0.01)) == ("id", "embedding")
         assert cfg.index_on_columns(LabelFilter(label_percentage=0.01)) == ("labels", "embedding")
+
+    def test_cover_clause_for_label_table(self):
+        assert YDBIndexConfig(cover_embedding=False).cover_clause(with_scalar_labels=True) == "COVER (embedding)"
+        assert YDBIndexConfig(cover_embedding=True).cover_clause(with_scalar_labels=True) == "COVER (embedding)"
+        assert YDBIndexConfig(cover_embedding=False).cover_clause() == ""
 
     def test_cover_clause(self):
         assert YDBIndexConfig(cover_embedding=True).cover_clause() == "COVER (embedding)"
@@ -131,6 +137,34 @@ class TestYDBTableDDL:
         client = self._make_client()
         client.case_config = YDBIndexConfig(cover_embedding=True)
         client.filters = IntFilter(int_value=100, filter_rate=0.01)
+        assert client._index_impl_table_paths() == [
+            "bench_table/bench_table_vector_idx/indexImplLevelTable",
+            "bench_table/bench_table_vector_idx/indexImplPostingTable",
+            "bench_table/bench_table_vector_idx/indexImplPrefixTable",
+        ]
+
+    def test_index_on_sql_for_label_table(self):
+        from vectordb_bench.backend.filter import LabelFilter
+
+        client = self._make_client()
+        client.with_scalar_labels = True
+        client.filters = LabelFilter(label_percentage=0.01)
+        client.case_config = YDBIndexConfig(cover_embedding=True)
+        assert client._index_on_sql() == "labels, embedding"
+        index_param = client.case_config.index_param(
+            client.filters,
+            with_scalar_labels=True,
+        )
+        assert index_param["on_columns"] == ("labels", "embedding")
+        assert index_param["cover_clause"] == "COVER (embedding)"
+
+    def test_index_impl_tables_with_label_filter(self):
+        from vectordb_bench.backend.filter import LabelFilter
+
+        client = self._make_client()
+        client.with_scalar_labels = True
+        client.filters = LabelFilter(label_percentage=0.01)
+        client.case_config = YDBIndexConfig(cover_embedding=True)
         assert client._index_impl_table_paths() == [
             "bench_table/bench_table_vector_idx/indexImplLevelTable",
             "bench_table/bench_table_vector_idx/indexImplPostingTable",

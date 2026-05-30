@@ -199,7 +199,7 @@ class YDB(VectorDB):
         paths = [f"{base}/{YDB_INDEX_IMPL_LEVEL_TABLE}"]
         if self.case_config.cover_embedding:
             paths.append(f"{base}/{YDB_INDEX_IMPL_POSTING_TABLE}")
-        if len(self.case_config.index_on_columns(self.filters)) > 1:
+        if len(self._resolved_index_on_columns()) > 1:
             paths.append(f"{base}/{YDB_INDEX_IMPL_PREFIX_TABLE}")
         return paths
 
@@ -236,14 +236,16 @@ class YDB(VectorDB):
             self.db_config.get("auto_partitioning_max_partitions_count", 1100),
         )
 
+    def _resolved_index_on_columns(self) -> tuple[str, ...]:
+        return self.case_config.index_on_columns(self.filters, with_scalar_labels=self.with_scalar_labels)
+
     def _index_on_sql(self) -> str:
-        columns = self.case_config.index_on_columns(self.filters)
-        return ", ".join(columns)
+        return ", ".join(self._resolved_index_on_columns())
 
     def _add_vector_index(self, pool, levels: int, clusters: int) -> None:
         import ydb
 
-        index_param = self.case_config.index_param(self.filters)
+        index_param = self.case_config.index_param(self.filters, with_scalar_labels=self.with_scalar_labels)
         strategy = index_param["strategy"]
         temp_index_name = f"{self.index_name}__temp"
         overlap_clusters = index_param.get("overlap_clusters", 3)

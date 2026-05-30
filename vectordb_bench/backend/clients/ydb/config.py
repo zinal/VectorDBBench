@@ -97,10 +97,10 @@ def compute_kmeans_tree_params(
     return levels, clusters
 
 
-def index_on_columns(filters: Filter) -> tuple[str, ...]:
+def index_on_columns(filters: Filter, *, with_scalar_labels: bool = False) -> tuple[str, ...]:
     if filters.type == FilterOp.NumGE:
         return ("id", "embedding")
-    if filters.type == FilterOp.StrEqual:
+    if with_scalar_labels or filters.type == FilterOp.StrEqual:
         return ("labels", "embedding")
     return ("embedding",)
 
@@ -160,24 +160,24 @@ class YDBIndexConfig(BaseModel, DBCaseConfig):
             return self.level, self.nlist
         return compute_kmeans_tree_params(size, self.level, self.nlist)
 
-    def index_on_columns(self, filters: Filter = non_filter) -> tuple[str, ...]:
-        return index_on_columns(filters)
+    def index_on_columns(self, filters: Filter = non_filter, *, with_scalar_labels: bool = False) -> tuple[str, ...]:
+        return index_on_columns(filters, with_scalar_labels=with_scalar_labels)
 
-    def cover_clause(self) -> str:
-        if not self.cover_embedding:
-            return ""
-        return "COVER (embedding)"
+    def cover_clause(self, *, with_scalar_labels: bool = False) -> str:
+        if with_scalar_labels or self.cover_embedding:
+            return "COVER (embedding)"
+        return ""
 
-    def index_param(self, filters: Filter = non_filter) -> dict:
+    def index_param(self, filters: Filter = non_filter, *, with_scalar_labels: bool = False) -> dict:
         levels, clusters = self.resolved_index_params(None)
-        on_columns = self.index_on_columns(filters)
+        on_columns = self.index_on_columns(filters, with_scalar_labels=with_scalar_labels)
         return {
             "strategy": self.index_strategy(),
             "levels": levels,
             "clusters": clusters,
             "overlap_clusters": self.overlap_clusters,
             "on_columns": on_columns,
-            "cover_clause": self.cover_clause(),
+            "cover_clause": self.cover_clause(with_scalar_labels=with_scalar_labels),
         }
 
     def search_param(self) -> dict:
