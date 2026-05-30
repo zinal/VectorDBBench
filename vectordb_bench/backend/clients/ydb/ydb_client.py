@@ -24,6 +24,9 @@ YDB_CREDENTIAL_ENV_KEYS = (
 YDB_LABEL_FIELD = "labels"
 YDB_INDEX_WAIT_POLL_SECONDS = 5
 YDB_INDEX_WAIT_TIMEOUT_SECONDS = 7200
+YDB_INDEX_IMPL_LEVEL_TABLE = "indexImplLevelTable"
+YDB_INDEX_IMPL_POSTING_TABLE = "indexImplPostingTable"
+YDB_INDEX_IMPL_PREFIX_TABLE = "indexImplPrefixTable"
 
 
 def convert_vector_to_bytes(vector: list[float]) -> bytes:
@@ -160,16 +163,58 @@ class YDB(VectorDB):
         pool.execute_with_retries(f"DROP TABLE IF EXISTS `{self.table_name}`")
         log.info("Dropped table %s", self.table_name)
 
-    def _create_table_with_clause(self) -> str:
+    def _partition_count_settings_sql(self) -> str:
         min_count = self.db_config.get("auto_partitioning_min_partitions_count", 1000)
         max_count = self.db_config.get("auto_partitioning_max_partitions_count", 1100)
+        return (
+            f"AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_count},\n"
+            f"                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_count}"
+        )
+
+    def _table_partitioning_settings_sql(self) -> str:
+        return (
+            "AUTO_PARTITIONING_BY_SIZE = ENABLED,\n"
+            "                AUTO_PARTITIONING_BY_LOAD = ENABLED,\n"
+            f"                {self._partition_count_settings_sql()}"
+        )
+
+    def _index_partitioning_settings_sql(self) -> str:
+        partition_size_mb = self.db_config.get("auto_partitioning_partition_size_mb", 1000)
+        return (
+            "AUTO_PARTITIONING_BY_SIZE = ENABLED,\n"
+            "                AUTO_PARTITIONING_BY_LOAD = ENABLED,\n"
+            f"                AUTO_PARTITIONING_PARTITION_SIZE_MB = {partition_size_mb},\n"
+            f"                {self._partition_count_settings_sql()}"
+        )
+
+    def _create_table_with_clause(self) -> str:
         return f"""
             WITH (
-                AUTO_PARTITIONING_BY_SIZE = ENABLED,
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_count},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_count}
+                {self._table_partitioning_settings_sql()}
             )"""
+
+    def _index_impl_table_paths(self) -> list[str]:
+        """Relative paths to vector index internal tables (see YDB vector index docs)."""
+        base = f"{self.table_name}/{self.index_name}"
+        paths = [f"{base}/{YDB_INDEX_IMPL_LEVEL_TABLE}"]
+        if self.case_config.cover_embedding:
+            paths.append(f"{base}/{YDB_INDEX_IMPL_POSTING_TABLE}")
+        if len(self.case_config.index_on_columns(self.filters)) > 1:
+            paths.append(f"{base}/{YDB_INDEX_IMPL_PREFIX_TABLE}")
+        return paths
+
+    def _configure_index_table_partitioning(self, pool) -> None:
+        settings_sql = self._index_partitioning_settings_sql()
+        for table_path in self._index_impl_table_paths():
+            pool.execute_with_retries(
+                f"""
+                ALTER TABLE `{table_path}`
+                SET (
+                    {settings_sql}
+                );
+                """
+            )
+            log.info("Configured auto partitioning for YDB index table %s", table_path)
 
     def _create_table(self, pool) -> None:
         label_column = f",\n                {YDB_LABEL_FIELD} Utf8" if self.with_scalar_labels else ""
@@ -290,6 +335,7 @@ class YDB(VectorDB):
         )
         self._add_vector_index(self.pool, levels=levels, clusters=clusters)
         self._wait_for_index(self.pool)
+        self._configure_index_table_partitioning(self.pool)
 
     def prepare_filter(self, filters: Filter) -> None:
         self._label_filter_value = None

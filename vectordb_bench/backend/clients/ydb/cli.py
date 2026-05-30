@@ -137,7 +137,7 @@ class YDBTypedDict(CommonTypedDict):
             type=int,
             default=1000,
             show_default=True,
-            help="CREATE TABLE WITH AUTO_PARTITIONING_MIN_PARTITIONS_COUNT",
+            help="AUTO_PARTITIONING_MIN_PARTITIONS_COUNT for data and index tables",
         ),
     ]
     auto_partitioning_max_partitions_count: Annotated[
@@ -147,7 +147,17 @@ class YDBTypedDict(CommonTypedDict):
             type=int,
             default=1100,
             show_default=True,
-            help="CREATE TABLE WITH AUTO_PARTITIONING_MAX_PARTITIONS_COUNT",
+            help="AUTO_PARTITIONING_MAX_PARTITIONS_COUNT for data and index tables",
+        ),
+    ]
+    auto_partitioning_partition_size_mb: Annotated[
+        int,
+        click.option(
+            "--auto-partitioning-partition-size-mb",
+            type=int,
+            default=1000,
+            show_default=True,
+            help="AUTO_PARTITIONING_PARTITION_SIZE_MB for vector index internal tables",
         ),
     ]
 
@@ -173,6 +183,7 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             table_name=parameters["table_name"],
             auto_partitioning_min_partitions_count=parameters["auto_partitioning_min_partitions_count"],
             auto_partitioning_max_partitions_count=parameters["auto_partitioning_max_partitions_count"],
+            auto_partitioning_partition_size_mb=parameters["auto_partitioning_partition_size_mb"],
         ),
         db_case_config=YDBIndexConfig(
             levels=parameters["levels"],

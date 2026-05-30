@@ -13,7 +13,7 @@ from vectordb_bench.backend.clients.ydb.config import (
     compute_kmeans_tree_params,
 )
 from vectordb_bench.backend.clients.ydb.ydb_client import YDB
-from vectordb_bench.backend.filter import IntFilter
+from vectordb_bench.backend.filter import IntFilter, non_filter
 
 
 def _integration_db_config() -> dict:
@@ -79,6 +79,7 @@ class TestYDBConfig:
         cfg = YDBConfig()
         assert cfg.auto_partitioning_min_partitions_count == 1000
         assert cfg.auto_partitioning_max_partitions_count == 1100
+        assert cfg.auto_partitioning_partition_size_mb == 1000
 
     def test_auto_partitioning_bounds_validation(self):
         with pytest.raises(ValueError, match="auto_partitioning_min_partitions_count"):
@@ -89,18 +90,59 @@ class TestYDBConfig:
 
 
 class TestYDBTableDDL:
-    def test_create_table_with_auto_partitioning(self):
+    def _make_client(self) -> YDB:
         client = YDB.__new__(YDB)
         client.db_config = YDBConfig(
             auto_partitioning_min_partitions_count=1000,
             auto_partitioning_max_partitions_count=1100,
         ).to_dict()
+        client.table_name = "bench_table"
+        client.index_name = "bench_table_vector_idx"
+        client.filters = non_filter
         client.with_scalar_labels = False
+        return client
+
+    def test_create_table_with_auto_partitioning(self):
+        client = self._make_client()
         ddl = client._create_table_with_clause()
         assert "AUTO_PARTITIONING_BY_SIZE = ENABLED" in ddl
         assert "AUTO_PARTITIONING_BY_LOAD = ENABLED" in ddl
+        assert "AUTO_PARTITIONING_PARTITION_SIZE_MB" not in ddl
         assert "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = 1000" in ddl
         assert "AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = 1100" in ddl
+
+    def test_index_impl_tables_global_cover(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(cover_embedding=True)
+        client.filters = non_filter
+        assert client._index_impl_table_paths() == [
+            "bench_table/bench_table_vector_idx/indexImplLevelTable",
+            "bench_table/bench_table_vector_idx/indexImplPostingTable",
+        ]
+
+    def test_index_impl_tables_without_cover(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(cover_embedding=False)
+        assert client._index_impl_table_paths() == [
+            "bench_table/bench_table_vector_idx/indexImplLevelTable",
+        ]
+
+    def test_index_impl_tables_with_filter_prefix(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(cover_embedding=True)
+        client.filters = IntFilter(int_value=100, filter_rate=0.01)
+        assert client._index_impl_table_paths() == [
+            "bench_table/bench_table_vector_idx/indexImplLevelTable",
+            "bench_table/bench_table_vector_idx/indexImplPostingTable",
+            "bench_table/bench_table_vector_idx/indexImplPrefixTable",
+        ]
+
+    def test_configure_index_table_partitioning_sql(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(cover_embedding=True)
+        settings = client._index_partitioning_settings_sql()
+        assert "AUTO_PARTITIONING_PARTITION_SIZE_MB = 1000" in settings
+        assert "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = 1000" in settings
 
 
 class TestYDBUIConfig:
