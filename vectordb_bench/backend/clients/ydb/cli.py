@@ -161,12 +161,22 @@ class YDBTypedDict(CommonTypedDict):
             help="AUTO_PARTITIONING_MAX_PARTITIONS_COUNT for data and index tables",
         ),
     ]
-    auto_partitioning_partition_size_mb: Annotated[
+    auto_partitioning_table_partition_size_mb: Annotated[
         int,
         click.option(
-            "--auto-partitioning-partition-size-mb",
+            "--auto-partitioning-table-partition-size-mb",
             type=int,
-            default=1000,
+            default=500,
+            show_default=True,
+            help="AUTO_PARTITIONING_PARTITION_SIZE_MB for the main data table",
+        ),
+    ]
+    auto_partitioning_index_partition_size_mb: Annotated[
+        int,
+        click.option(
+            "--auto-partitioning-index-partition-size-mb",
+            type=int,
+            default=200,
             show_default=True,
             help="AUTO_PARTITIONING_PARTITION_SIZE_MB for vector index internal tables",
         ),
@@ -205,7 +215,8 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             ssl_root_certificates_file=parameters["ssl_root_certificates_file"],
             auto_partitioning_min_partitions_count=parameters["auto_partitioning_min_partitions_count"],
             auto_partitioning_max_partitions_count=parameters["auto_partitioning_max_partitions_count"],
-            auto_partitioning_partition_size_mb=parameters["auto_partitioning_partition_size_mb"],
+            auto_partitioning_table_partition_size_mb=parameters["auto_partitioning_table_partition_size_mb"],
+            auto_partitioning_index_partition_size_mb=parameters["auto_partitioning_index_partition_size_mb"],
             operation_timeout_seconds=parameters["operation_timeout_seconds"],
         ),
         db_case_config=YDBIndexConfig(

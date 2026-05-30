@@ -25,6 +25,8 @@ YDB_CREDENTIAL_ENV_KEYS = (
 YDB_LABEL_FIELD = "labels"
 YDB_INDEX_WAIT_POLL_SECONDS = 5
 YDB_INDEX_WAIT_TIMEOUT_SECONDS = 7200
+YDB_DEFAULT_TABLE_PARTITION_SIZE_MB = 500
+YDB_DEFAULT_INDEX_PARTITION_SIZE_MB = 200
 YDB_DEFAULT_OPERATION_TIMEOUT_SECONDS = 24 * 3600
 YDB_INDEX_IMPL_LEVEL_TABLE = "indexImplLevelTable"
 YDB_INDEX_IMPL_POSTING_TABLE = "indexImplPostingTable"
@@ -220,14 +222,22 @@ class YDB(VectorDB):
         )
 
     def _table_partitioning_settings_sql(self) -> str:
+        partition_size_mb = self.db_config.get(
+            "auto_partitioning_table_partition_size_mb",
+            YDB_DEFAULT_TABLE_PARTITION_SIZE_MB,
+        )
         return (
             "AUTO_PARTITIONING_BY_SIZE = ENABLED,\n"
             "                AUTO_PARTITIONING_BY_LOAD = ENABLED,\n"
+            f"                AUTO_PARTITIONING_PARTITION_SIZE_MB = {partition_size_mb},\n"
             f"                {self._partition_count_settings_sql()}"
         )
 
     def _index_partitioning_settings_sql(self) -> str:
-        partition_size_mb = self.db_config.get("auto_partitioning_partition_size_mb", 1000)
+        partition_size_mb = self.db_config.get(
+            "auto_partitioning_index_partition_size_mb",
+            YDB_DEFAULT_INDEX_PARTITION_SIZE_MB,
+        )
         return (
             "AUTO_PARTITIONING_BY_SIZE = ENABLED,\n"
             "                AUTO_PARTITIONING_BY_LOAD = ENABLED,\n"
