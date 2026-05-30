@@ -101,6 +101,16 @@ class YDBTypedDict(CommonTypedDict):
             help="PRAGMA ydb.KMeansTreeSearchTopSize for search completeness",
         ),
     ]
+    overlap_clusters: Annotated[
+        int,
+        click.option(
+            "--overlap-clusters",
+            type=int,
+            default=3,
+            show_default=True,
+            help="vector_kmeans_tree overlap_clusters (higher = better recall, larger index)",
+        ),
+    ]
     cover_embedding: Annotated[
         bool,
         click.option(
@@ -146,6 +156,7 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             levels=parameters["levels"],
             clusters=parameters["clusters"],
             kmeans_tree_search_top_size=parameters["kmeans_tree_search_top_size"],
+            overlap_clusters=parameters["overlap_clusters"],
             cover_embedding=parameters["cover_embedding"],
         ),
         **parameters,
