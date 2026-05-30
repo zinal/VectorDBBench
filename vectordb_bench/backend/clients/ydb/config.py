@@ -1,7 +1,7 @@
 import os
 from typing import ClassVar, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from vectordb_bench.backend.filter import Filter, FilterOp, non_filter
 
@@ -96,6 +96,23 @@ class YDBIndexConfig(BaseModel, DBCaseConfig):
     num_leaves_to_search: int = Field(default=10, alias="kmeans_tree_search_top_size")
     overlap_clusters: int = 3
     cover_embedding: bool = True
+
+    @field_validator("level", "nlist", mode="before")
+    @classmethod
+    def zero_means_auto(cls, value: int | None) -> int | None:
+        if value == 0:
+            return None
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_empty_optional_numbers(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        for key in ("level", "levels", "nlist", "clusters"):
+            if data.get(key) in ("", None):
+                data[key] = None
+        return data
 
     def index_strategy(self) -> str:
         if self.metric_type == MetricType.L2:

@@ -70,6 +70,33 @@ class TestYDBConfig:
         assert YDBIndexConfig(cover_embedding=True).cover_clause() == "COVER (embedding)"
         assert YDBIndexConfig(cover_embedding=False).cover_clause() == ""
 
+    def test_zero_means_auto_for_index_shape(self):
+        cfg = YDBIndexConfig(level=0, nlist=0)
+        assert cfg.level is None
+        assert cfg.nlist is None
+
+
+class TestYDBUIConfig:
+    def test_ydb_is_in_ui_db_list(self):
+        from vectordb_bench.frontend.config.dbCaseConfigs import DB_LIST, CASE_CONFIG_MAP
+
+        assert DB.YDB in DB_LIST
+        assert DB.YDB in CASE_CONFIG_MAP
+
+    def test_ui_case_config_maps_to_ydb_index_config(self):
+        from vectordb_bench.backend.cases import CaseLabel
+        from vectordb_bench.frontend.config.dbCaseConfigs import get_case_config_inputs
+
+        ui_cfg = {
+            c.label.value: c.inputConfig["value"]
+            for c in get_case_config_inputs(DB.YDB, CaseLabel.Performance)
+        }
+        inst = DB.YDB.case_config_cls(None)(**ui_cfg)
+        assert inst.overlap_clusters == 3
+        assert inst.num_leaves_to_search == 10
+        assert inst.level is None
+        assert inst.nlist is None
+
 
 class TestYDBAuth:
     def test_build_credentials_login_from_env(self, monkeypatch):

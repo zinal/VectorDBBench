@@ -1734,23 +1734,23 @@ CaseConfigParamInput_VectorSearchBeamSize_CockroachDB = CaseConfigInput(
 
 CaseConfigParamInput_Level_YDB = CaseConfigInput(
     label=CaseConfigParamType.level,
-    inputHelp="vector_kmeans_tree levels (empty = auto from dataset size)",
+    inputHelp="vector_kmeans_tree levels (0 = auto from dataset size)",
     inputType=InputType.Number,
     inputConfig={
-        "min": 1,
+        "min": 0,
         "max": 4,
-        "value": None,
+        "value": 0,
     },
 )
 
 CaseConfigParamInput_Nlist_YDB = CaseConfigInput(
     label=CaseConfigParamType.Nlist,
-    inputHelp="Clusters per tree level (empty = auto, recommended 20-512)",
+    inputHelp="Clusters per tree level (0 = auto, recommended 20-512)",
     inputType=InputType.Number,
     inputConfig={
-        "min": 3,
+        "min": 0,
         "max": 512,
-        "value": None,
+        "value": 0,
     },
 )
 
@@ -1772,6 +1772,17 @@ CaseConfigParamInput_CoverEmbedding_YDB = CaseConfigInput(
     inputHelp="Use COVER (embedding) to avoid reads from the base table during vector search",
     inputConfig={
         "value": True,
+    },
+)
+
+CaseConfigParamInput_OverlapClusters_YDB = CaseConfigInput(
+    label=CaseConfigParamType.overlap_clusters,
+    inputHelp="vector_kmeans_tree overlap_clusters (higher = better recall, larger index)",
+    inputType=InputType.Number,
+    inputConfig={
+        "min": 1,
+        "max": 32,
+        "value": 3,
     },
 )
 
@@ -2435,6 +2446,7 @@ YDBLoadingConfig = [
     CaseConfigParamInput_Level_YDB,
     CaseConfigParamInput_Nlist_YDB,
     CaseConfigParamInput_NumLeavesToSearch_YDB,
+    CaseConfigParamInput_OverlapClusters_YDB,
     CaseConfigParamInput_CoverEmbedding_YDB,
 ]
 YDBPerformanceConfig = YDBLoadingConfig

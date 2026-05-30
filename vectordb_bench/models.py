@@ -84,6 +84,7 @@ class CaseConfigParamType(Enum):
     sq_type = "sq_type"
     with_raw_data = "with_raw_data"
     cover_embedding = "cover_embedding"
+    overlap_clusters = "overlap_clusters"
     reorder_k = "reorder_k"
     level = "level"
     maintenance_work_mem = "maintenance_work_mem"
