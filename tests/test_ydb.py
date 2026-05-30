@@ -75,6 +75,33 @@ class TestYDBConfig:
         assert cfg.level is None
         assert cfg.nlist is None
 
+    def test_auto_partitioning_defaults(self):
+        cfg = YDBConfig()
+        assert cfg.auto_partitioning_min_partitions_count == 1000
+        assert cfg.auto_partitioning_max_partitions_count == 1100
+
+    def test_auto_partitioning_bounds_validation(self):
+        with pytest.raises(ValueError, match="auto_partitioning_min_partitions_count"):
+            YDBConfig(
+                auto_partitioning_min_partitions_count=1200,
+                auto_partitioning_max_partitions_count=1100,
+            )
+
+
+class TestYDBTableDDL:
+    def test_create_table_with_auto_partitioning(self):
+        client = YDB.__new__(YDB)
+        client.db_config = YDBConfig(
+            auto_partitioning_min_partitions_count=1000,
+            auto_partitioning_max_partitions_count=1100,
+        ).to_dict()
+        client.with_scalar_labels = False
+        ddl = client._create_table_with_clause()
+        assert "AUTO_PARTITIONING_BY_SIZE = ENABLED" in ddl
+        assert "AUTO_PARTITIONING_BY_LOAD = ENABLED" in ddl
+        assert "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = 1000" in ddl
+        assert "AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = 1100" in ddl
+
 
 class TestYDBUIConfig:
     def test_ydb_is_in_ui_db_list(self):

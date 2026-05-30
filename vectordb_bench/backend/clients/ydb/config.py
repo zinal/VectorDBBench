@@ -16,6 +16,8 @@ class YDBConfigDict(TypedDict, total=False):
     user: str
     password: str
     table_name: str
+    auto_partitioning_min_partitions_count: int
+    auto_partitioning_max_partitions_count: int
 
 
 class YDBConfig(DBConfig):
@@ -28,6 +30,18 @@ class YDBConfig(DBConfig):
     user: str = ""
     password: SecretStr | None = None
     table_name: str = ""
+    auto_partitioning_min_partitions_count: int = 1000
+    auto_partitioning_max_partitions_count: int = 1100
+
+    @model_validator(mode="after")
+    def validate_partition_bounds(self) -> "YDBConfig":
+        if self.auto_partitioning_min_partitions_count > self.auto_partitioning_max_partitions_count:
+            msg = (
+                "auto_partitioning_min_partitions_count must be less than or equal to "
+                "auto_partitioning_max_partitions_count"
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -50,6 +64,8 @@ class YDBConfig(DBConfig):
             "token": token_str,
             "user": self.user,
             "password": password_str,
+            "auto_partitioning_min_partitions_count": self.auto_partitioning_min_partitions_count,
+            "auto_partitioning_max_partitions_count": self.auto_partitioning_max_partitions_count,
         }
         if self.table_name:
             result["table_name"] = self.table_name

@@ -130,6 +130,26 @@ class YDBTypedDict(CommonTypedDict):
             help="YDB table name (auto-generated per case if omitted)",
         ),
     ]
+    auto_partitioning_min_partitions_count: Annotated[
+        int,
+        click.option(
+            "--auto-partitioning-min-partitions-count",
+            type=int,
+            default=1000,
+            show_default=True,
+            help="CREATE TABLE WITH AUTO_PARTITIONING_MIN_PARTITIONS_COUNT",
+        ),
+    ]
+    auto_partitioning_max_partitions_count: Annotated[
+        int,
+        click.option(
+            "--auto-partitioning-max-partitions-count",
+            type=int,
+            default=1100,
+            show_default=True,
+            help="CREATE TABLE WITH AUTO_PARTITIONING_MAX_PARTITIONS_COUNT",
+        ),
+    ]
 
 
 @cli.command()
@@ -151,6 +171,8 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             user=parameters["user"],
             password=SecretStr(password) if password else None,
             table_name=parameters["table_name"],
+            auto_partitioning_min_partitions_count=parameters["auto_partitioning_min_partitions_count"],
+            auto_partitioning_max_partitions_count=parameters["auto_partitioning_max_partitions_count"],
         ),
         db_case_config=YDBIndexConfig(
             levels=parameters["levels"],

@@ -160,18 +160,36 @@ class YDB(VectorDB):
         pool.execute_with_retries(f"DROP TABLE IF EXISTS `{self.table_name}`")
         log.info("Dropped table %s", self.table_name)
 
+    def _create_table_with_clause(self) -> str:
+        min_count = self.db_config.get("auto_partitioning_min_partitions_count", 1000)
+        max_count = self.db_config.get("auto_partitioning_max_partitions_count", 1100)
+        return f"""
+            WITH (
+                AUTO_PARTITIONING_BY_SIZE = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_count}
+            )"""
+
     def _create_table(self, pool) -> None:
         label_column = f",\n                {YDB_LABEL_FIELD} Utf8" if self.with_scalar_labels else ""
+        with_clause = self._create_table_with_clause()
         pool.execute_with_retries(
             f"""
             CREATE TABLE IF NOT EXISTS `{self.table_name}` (
                 id Uint64 NOT NULL,
                 embedding String NOT NULL{label_column},
                 PRIMARY KEY (id)
-            );
+            ){with_clause};
             """
         )
-        log.info("Created table %s (with_scalar_labels=%s)", self.table_name, self.with_scalar_labels)
+        log.info(
+            "Created table %s (with_scalar_labels=%s, auto_partitioning_min=%s, auto_partitioning_max=%s)",
+            self.table_name,
+            self.with_scalar_labels,
+            self.db_config.get("auto_partitioning_min_partitions_count", 1000),
+            self.db_config.get("auto_partitioning_max_partitions_count", 1100),
+        )
 
     def _index_on_sql(self) -> str:
         columns = self.case_config.index_on_columns(self.filters)
