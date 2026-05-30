@@ -62,6 +62,7 @@ class YDB(VectorDB):
         self.filters = filters
         self.with_scalar_labels = with_scalar_labels or filters.type == FilterOp.StrEqual
         self._where_clause = ""
+        self._label_filter_value: str | None = None
         self._index_ready = False
 
         self.driver = None
@@ -195,7 +196,7 @@ class YDB(VectorDB):
             ON ({on_sql}){cover_sql}
             WITH (
                 {strategy},
-                vector_type="Float",
+                vector_type="float",
                 vector_dimension={self.dim},
                 levels={levels},
                 clusters={clusters},
@@ -273,12 +274,14 @@ class YDB(VectorDB):
         self._wait_for_index(self.pool)
 
     def prepare_filter(self, filters: Filter) -> None:
+        self._label_filter_value = None
         if filters.type == FilterOp.NonFilter:
             self._where_clause = ""
         elif filters.type == FilterOp.NumGE:
             self._where_clause = f"WHERE id >= {filters.int_value}"
         elif filters.type == FilterOp.StrEqual:
-            self._where_clause = f"WHERE {YDB_LABEL_FIELD} = '{filters.label_value}'"
+            self._where_clause = f"WHERE {YDB_LABEL_FIELD} = $label"
+            self._label_filter_value = filters.label_value
         else:
             msg = f"Unsupported filter type for YDB: {filters.type}"
             raise ValueError(msg)
@@ -381,9 +384,10 @@ class YDB(VectorDB):
         use_index = self.case_config.create_index_after_load
         view_clause = f"VIEW {self.index_name}" if use_index else ""
         where_clause = f"\n        {self._where_clause}" if self._where_clause else ""
+        label_declare = "\n        DECLARE $label AS Utf8;" if self._label_filter_value is not None else ""
 
         yql = f"""
-        PRAGMA ydb.KMeansTreeSearchTopSize = "{top_clusters}";
+        PRAGMA ydb.KMeansTreeSearchTopSize = "{top_clusters}";{label_declare}
         DECLARE $embedding AS String;
 
         SELECT id
@@ -392,15 +396,16 @@ class YDB(VectorDB):
         LIMIT {k};
         """
 
-        result_sets = self.pool.execute_with_retries(
-            yql,
-            {
-                "$embedding": (
-                    convert_vector_to_bytes(query),
-                    ydb.PrimitiveType.String,
-                ),
-            },
-        )
+        params: dict[str, tuple] = {
+            "$embedding": (
+                convert_vector_to_bytes(query),
+                ydb.PrimitiveType.String,
+            ),
+        }
+        if self._label_filter_value is not None:
+            params["$label"] = (self._label_filter_value, ydb.PrimitiveType.Utf8)
+
+        result_sets = self.pool.execute_with_retries(yql, params)
 
         ids: list[int] = []
         for result_set in result_sets:

@@ -110,6 +110,16 @@ class YDBTypedDict(CommonTypedDict):
             help="Store vectors in the index posting table (COVER embedding)",
         ),
     ]
+    table_name: Annotated[
+        str,
+        click.option(
+            "--table-name",
+            type=str,
+            default="",
+            show_default=False,
+            help="YDB table name (auto-generated per case if omitted)",
+        ),
+    ]
 
 
 @cli.command()
@@ -130,6 +140,7 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             token=SecretStr(token) if token else None,
             user=parameters["user"],
             password=SecretStr(password) if password else None,
+            table_name=parameters["table_name"],
         ),
         db_case_config=YDBIndexConfig(
             levels=parameters["levels"],

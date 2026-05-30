@@ -123,8 +123,19 @@ class TestYDBAuth:
 class TestYDBFilters:
     def test_prepare_filter_int(self):
         client = YDB.__new__(YDB)
+        client._label_filter_value = None
         client.prepare_filter(IntFilter(int_value=12345, filter_rate=0.01))
         assert client._where_clause == "WHERE id >= 12345"
+        assert client._label_filter_value is None
+
+    def test_prepare_filter_label_uses_parameter(self):
+        from vectordb_bench.backend.filter import LabelFilter
+
+        client = YDB.__new__(YDB)
+        client._label_filter_value = None
+        client.prepare_filter(LabelFilter(label_percentage=0.05))
+        assert client._where_clause == "WHERE labels = $label"
+        assert client._label_filter_value == "label_5p"
 
     def test_supported_filter_types(self):
         assert FilterOp.NumGE in YDB.supported_filter_types

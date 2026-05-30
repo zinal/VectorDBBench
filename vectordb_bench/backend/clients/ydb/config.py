@@ -8,13 +8,14 @@ from vectordb_bench.backend.filter import Filter, FilterOp, non_filter
 from ..api import DBCaseConfig, DBConfig, MetricType
 
 
-class YDBConfigDict(TypedDict):
+class YDBConfigDict(TypedDict, total=False):
     endpoint: str
     database: str
     auth_mode: str
     token: str
     user: str
     password: str
+    table_name: str
 
 
 class YDBConfig(DBConfig):
@@ -26,6 +27,7 @@ class YDBConfig(DBConfig):
     token: SecretStr | None = None
     user: str = ""
     password: SecretStr | None = None
+    table_name: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -41,7 +43,7 @@ class YDBConfig(DBConfig):
     def to_dict(self) -> YDBConfigDict:
         token_str = self.token.get_secret_value() if self.token else ""
         password_str = self.password.get_secret_value() if self.password else ""
-        return {
+        result: YDBConfigDict = {
             "endpoint": self.endpoint,
             "database": self.database,
             "auth_mode": self.auth_mode,
@@ -49,6 +51,9 @@ class YDBConfig(DBConfig):
             "user": self.user,
             "password": password_str,
         }
+        if self.table_name:
+            result["table_name"] = self.table_name
+        return result
 
 
 def compute_kmeans_tree_params(
