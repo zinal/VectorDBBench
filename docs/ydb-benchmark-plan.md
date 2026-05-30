@@ -115,6 +115,54 @@ export YDB_DATABASE=/Root/db1
 --auto-partitioning-partition-size-mb 1000
 ```
 
+### 2.3. Где хранятся датасеты и как ускорить загрузку
+
+По умолчанию датасеты скачиваются в `/tmp/vectordb_bench/dataset` и
+раскладываются по подпапкам `DATASET_LOCAL_DIR/{dataset_name}/{dataset_dirname}`
+(см. `vectordb_bench/__init__.py` и `dataset.py`). `/tmp` часто чистится при
+перезагрузке (а порой это вообще tmpfs в RAM), из-за чего большие датасеты
+скачиваются повторно — отсюда «медленно качаются».
+
+**Куда складывать датасеты — переменная `DATASET_LOCAL_DIR`.** Переменные
+окружения читаются при импорте пакета (до запуска любой команды), поэтому задаём
+их заранее — через окружение или через файл `.env` в **текущем рабочем каталоге**
+(он читается с `recurse=False`, то есть только из каталога запуска):
+
+```shell
+# вариант 1: переменная окружения в той же сессии
+export DATASET_LOCAL_DIR=/data/vectordb_bench/dataset
+vectordbbench ydb --case-type Performance768D1M ...
+```
+
+```dotenv
+# вариант 2: .env в каталоге запуска
+DATASET_LOCAL_DIR=/data/vectordb_bench/dataset
+```
+
+Рекомендации, чтобы не перекачивать датасеты между прогонами:
+
+- Указывайте `DATASET_LOCAL_DIR` на **постоянный** быстрый диск (NVMe/SSD), а не
+  на `/tmp`. Загрузка идёт один раз: при повторных запусках размер локального
+  файла сверяется с удалённым, и совпавшие файлы пропускаются.
+- В dev-контейнере смонтируйте постоянный каталог (в README есть пример с
+  `~/vectordb_bench/dataset`), чтобы кэш переживал пересоздание контейнера.
+- Один и тот же `DATASET_LOCAL_DIR` нужно выставить и для CLI (`vectordbbench`),
+  и для веб-UI (`init_bench`/`python -m vectordb_bench`).
+
+**Источник загрузки — `DATASET_SOURCE` / `DEFAULT_DATASET_URL`.** Если узкое место
+не диск, а сеть до источника, можно сменить источник:
+
+```dotenv
+DATASET_SOURCE=S3            # "S3" (по умолчанию, регион us-west-2) или "AliyunOSS"
+DEFAULT_DATASET_URL=assets.zilliz.com/benchmark/   # свой/зеркальный бакет при необходимости
+```
+
+Практичный приём: один раз скачать датасет в постоянный `DATASET_LOCAL_DIR`
+(в т. ч. вручную, например `aws s3 cp --no-sign-request \
+s3://assets.zilliz.com/benchmark/<dataset>/<dirname>/ \
+$DATASET_LOCAL_DIR/<dataset>/<dirname>/ --recursive`), после чего все прогоны
+переиспользуют локальную копию без повторной загрузки.
+
 ---
 
 ## 3. Матрица датасетов и кейсов
