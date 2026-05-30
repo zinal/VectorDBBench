@@ -184,6 +184,8 @@ class CaseRunner(BaseModel):
         if self.ca.is_multitenant:
             extra_db_kwargs["multitenant_tenant_labels"] = self.ca.tenant_labels()
 
+        extra_db_kwargs["filters"] = self.ca.filters
+
         self.db = db_cls(
             dim=self.ca.dataset.data.dim,
             db_config=db_config_dict,

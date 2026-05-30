@@ -1761,7 +1761,17 @@ CaseConfigParamInput_NumLeavesToSearch_YDB = CaseConfigInput(
     inputConfig={
         "min": 1,
         "max": 32,
-        "value": 3,
+        "value": 10,
+    },
+)
+
+CaseConfigParamInput_CoverEmbedding_YDB = CaseConfigInput(
+    label=CaseConfigParamType.cover_embedding,
+    inputType=InputType.Bool,
+    displayLabel="Cover embedding in index",
+    inputHelp="Use COVER (embedding) to avoid reads from the base table during vector search",
+    inputConfig={
+        "value": True,
     },
 )
 
@@ -2425,6 +2435,7 @@ YDBLoadingConfig = [
     CaseConfigParamInput_Level_YDB,
     CaseConfigParamInput_Nlist_YDB,
     CaseConfigParamInput_NumLeavesToSearch_YDB,
+    CaseConfigParamInput_CoverEmbedding_YDB,
 ]
 YDBPerformanceConfig = YDBLoadingConfig
 

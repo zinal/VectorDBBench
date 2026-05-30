@@ -96,9 +96,18 @@ class YDBTypedDict(CommonTypedDict):
         click.option(
             "--kmeans-tree-search-top-size",
             type=int,
-            default=3,
+            default=10,
             show_default=True,
             help="PRAGMA ydb.KMeansTreeSearchTopSize for search completeness",
+        ),
+    ]
+    cover_embedding: Annotated[
+        bool,
+        click.option(
+            "--cover-embedding/--no-cover-embedding",
+            default=True,
+            show_default=True,
+            help="Store vectors in the index posting table (COVER embedding)",
         ),
     ]
 
@@ -126,6 +135,7 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             levels=parameters["levels"],
             clusters=parameters["clusters"],
             kmeans_tree_search_top_size=parameters["kmeans_tree_search_top_size"],
+            cover_embedding=parameters["cover_embedding"],
         ),
         **parameters,
     )

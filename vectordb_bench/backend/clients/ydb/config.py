@@ -1,7 +1,9 @@
-from typing import ClassVar, TypedDict
 import os
+from typing import ClassVar, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+
+from vectordb_bench.backend.filter import Filter, FilterOp, non_filter
 
 from ..api import DBCaseConfig, DBConfig, MetricType
 
@@ -71,6 +73,14 @@ def compute_kmeans_tree_params(
     return levels, clusters
 
 
+def index_on_columns(filters: Filter) -> tuple[str, ...]:
+    if filters.type == FilterOp.NumGE:
+        return ("id", "embedding")
+    if filters.type == FilterOp.StrEqual:
+        return ("labels", "embedding")
+    return ("embedding",)
+
+
 class YDBIndexConfig(BaseModel, DBCaseConfig):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -78,8 +88,9 @@ class YDBIndexConfig(BaseModel, DBCaseConfig):
     create_index_after_load: bool = True
     level: int | None = Field(default=None, alias="levels")
     nlist: int | None = Field(default=None, alias="clusters")
-    num_leaves_to_search: int = Field(default=3, alias="kmeans_tree_search_top_size")
+    num_leaves_to_search: int = Field(default=10, alias="kmeans_tree_search_top_size")
     overlap_clusters: int = 3
+    cover_embedding: bool = True
 
     def index_strategy(self) -> str:
         if self.metric_type == MetricType.L2:
@@ -108,13 +119,24 @@ class YDBIndexConfig(BaseModel, DBCaseConfig):
             return self.level, self.nlist
         return compute_kmeans_tree_params(size, self.level, self.nlist)
 
-    def index_param(self) -> dict:
+    def index_on_columns(self, filters: Filter = non_filter) -> tuple[str, ...]:
+        return index_on_columns(filters)
+
+    def cover_clause(self) -> str:
+        if not self.cover_embedding:
+            return ""
+        return "COVER (embedding)"
+
+    def index_param(self, filters: Filter = non_filter) -> dict:
         levels, clusters = self.resolved_index_params(None)
+        on_columns = self.index_on_columns(filters)
         return {
             "strategy": self.index_strategy(),
             "levels": levels,
             "clusters": clusters,
             "overlap_clusters": self.overlap_clusters,
+            "on_columns": on_columns,
+            "cover_clause": self.cover_clause(),
         }
 
     def search_param(self) -> dict:

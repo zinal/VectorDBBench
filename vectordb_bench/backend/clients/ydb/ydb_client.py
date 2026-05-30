@@ -1,8 +1,11 @@
 import logging
 import os
 import struct
+import time
 from contextlib import contextmanager
 from typing import Any
+
+from vectordb_bench.backend.filter import Filter, FilterOp, non_filter
 
 from ..api import VectorDB
 from .config import YDBIndexConfig
@@ -18,6 +21,10 @@ YDB_CREDENTIAL_ENV_KEYS = (
     "YDB_OAUTH2_KEY_FILE",
 )
 
+YDB_LABEL_FIELD = "labels"
+YDB_INDEX_WAIT_POLL_SECONDS = 5
+YDB_INDEX_WAIT_TIMEOUT_SECONDS = 7200
+
 
 def convert_vector_to_bytes(vector: list[float]) -> bytes:
     values = [float(v) for v in vector]
@@ -28,6 +35,11 @@ def convert_vector_to_bytes(vector: list[float]) -> bytes:
 class YDB(VectorDB):
     """YDB vector search client using vector_kmeans_tree indexes."""
 
+    supported_filter_types: list[FilterOp] = [
+        FilterOp.NonFilter,
+        FilterOp.NumGE,
+        FilterOp.StrEqual,
+    ]
     thread_safe = True
 
     def __init__(
@@ -37,6 +49,8 @@ class YDB(VectorDB):
         db_case_config: YDBIndexConfig,
         collection_name: str = "vdbbench_ydb",
         drop_old: bool = False,
+        with_scalar_labels: bool = False,
+        filters: Filter = non_filter,
         **kwargs,
     ):
         self.name = "YDB"
@@ -45,6 +59,10 @@ class YDB(VectorDB):
         self.table_name = collection_name
         self.index_name = f"{collection_name}_vector_idx"
         self.dim = dim
+        self.filters = filters
+        self.with_scalar_labels = with_scalar_labels or filters.type == FilterOp.StrEqual
+        self._where_clause = ""
+        self._index_ready = False
 
         self.driver = None
         self.pool = None
@@ -142,31 +160,39 @@ class YDB(VectorDB):
         log.info("Dropped table %s", self.table_name)
 
     def _create_table(self, pool) -> None:
+        label_column = f",\n                {YDB_LABEL_FIELD} Utf8" if self.with_scalar_labels else ""
         pool.execute_with_retries(
             f"""
             CREATE TABLE IF NOT EXISTS `{self.table_name}` (
                 id Uint64 NOT NULL,
-                embedding String NOT NULL,
+                embedding String NOT NULL{label_column},
                 PRIMARY KEY (id)
             );
             """
         )
-        log.info("Created table %s", self.table_name)
+        log.info("Created table %s (with_scalar_labels=%s)", self.table_name, self.with_scalar_labels)
+
+    def _index_on_sql(self) -> str:
+        columns = self.case_config.index_on_columns(self.filters)
+        return ", ".join(columns)
 
     def _add_vector_index(self, pool, levels: int, clusters: int) -> None:
         import ydb
 
-        index_param = self.case_config.index_param()
+        index_param = self.case_config.index_param(self.filters)
         strategy = index_param["strategy"]
         temp_index_name = f"{self.index_name}__temp"
         overlap_clusters = index_param.get("overlap_clusters", 3)
+        on_sql = self._index_on_sql()
+        cover_clause = index_param.get("cover_clause", "")
+        cover_sql = f" {cover_clause}" if cover_clause else ""
 
         pool.execute_with_retries(
             f"""
             ALTER TABLE `{self.table_name}`
             ADD INDEX {temp_index_name}
             GLOBAL USING vector_kmeans_tree
-            ON (embedding)
+            ON ({on_sql}){cover_sql}
             WITH (
                 {strategy},
                 vector_type="Float",
@@ -190,12 +216,46 @@ class YDB(VectorDB):
             ],
         )
         log.info(
-            "Created vector index %s on %s (levels=%d, clusters=%d)",
+            "Created vector index %s on %s ON (%s)%s (levels=%d, clusters=%d)",
             self.index_name,
             self.table_name,
+            on_sql,
+            cover_sql,
             levels,
             clusters,
         )
+
+    def _wait_for_index(self, pool) -> None:
+        import ydb
+
+        search_param = self.case_config.search_param()
+        knn_function = search_param["knn_function"]
+        sort_order = search_param["sort_order"]
+        probe_vector = convert_vector_to_bytes([0.0] * self.dim)
+        deadline = time.monotonic() + YDB_INDEX_WAIT_TIMEOUT_SECONDS
+        query = f"""
+        PRAGMA ydb.KMeansTreeSearchTopSize = "1";
+        DECLARE $embedding AS String;
+
+        SELECT id
+        FROM `{self.table_name}` VIEW {self.index_name}
+        ORDER BY Knn::{knn_function}(embedding, $embedding) {sort_order}
+        LIMIT 1;
+        """
+        params = {"$embedding": (probe_vector, ydb.PrimitiveType.String)}
+
+        while time.monotonic() < deadline:
+            try:
+                pool.execute_with_retries(query, params)
+                self._index_ready = True
+                log.info("Vector index %s is ready", self.index_name)
+                return
+            except Exception as exc:
+                log.info("Waiting for vector index %s: %s", self.index_name, exc)
+                time.sleep(YDB_INDEX_WAIT_POLL_SECONDS)
+
+        msg = f"Timed out waiting for YDB vector index {self.index_name} after {YDB_INDEX_WAIT_TIMEOUT_SECONDS}s"
+        raise TimeoutError(msg)
 
     def optimize(self, data_size: int | None = None) -> None:
         if not self.case_config.create_index_after_load:
@@ -210,11 +270,24 @@ class YDB(VectorDB):
             clusters,
         )
         self._add_vector_index(self.pool, levels=levels, clusters=clusters)
+        self._wait_for_index(self.pool)
+
+    def prepare_filter(self, filters: Filter) -> None:
+        if filters.type == FilterOp.NonFilter:
+            self._where_clause = ""
+        elif filters.type == FilterOp.NumGE:
+            self._where_clause = f"WHERE id >= {filters.int_value}"
+        elif filters.type == FilterOp.StrEqual:
+            self._where_clause = f"WHERE {YDB_LABEL_FIELD} = '{filters.label_value}'"
+        else:
+            msg = f"Unsupported filter type for YDB: {filters.type}"
+            raise ValueError(msg)
 
     def insert_embeddings(
         self,
         embeddings: list[list[float]],
         metadata: list[int],
+        labels_data: list[str] | None = None,
         **kwargs: Any,
     ) -> tuple[int, Exception]:
         import ydb
@@ -222,32 +295,66 @@ class YDB(VectorDB):
         if not embeddings:
             return 0, None
 
+        if self.with_scalar_labels:
+            if labels_data is None:
+                msg = "labels_data is required when loading label-filter cases into YDB"
+                raise ValueError(msg)
+            if len(labels_data) != len(metadata):
+                msg = "labels_data length must match metadata length"
+                raise ValueError(msg)
+
         batch_size = 1000
-        items_struct_type = ydb.StructType()
-        items_struct_type.add_member("id", ydb.PrimitiveType.Uint64)
-        items_struct_type.add_member("embedding", ydb.PrimitiveType.String)
+        if self.with_scalar_labels:
+            items_struct_type = ydb.StructType()
+            items_struct_type.add_member("id", ydb.PrimitiveType.Uint64)
+            items_struct_type.add_member("embedding", ydb.PrimitiveType.String)
+            items_struct_type.add_member(YDB_LABEL_FIELD, ydb.PrimitiveType.Utf8)
+            query = f"""
+            DECLARE $items AS List<Struct<
+                id: Uint64,
+                embedding: String,
+                {YDB_LABEL_FIELD}: Utf8
+            >>;
 
-        query = f"""
-        DECLARE $items AS List<Struct<
-            id: Uint64,
-            embedding: String
-        >>;
+            UPSERT INTO `{self.table_name}` (id, embedding, {YDB_LABEL_FIELD})
+            SELECT id, embedding, {YDB_LABEL_FIELD}
+            FROM AS_TABLE($items);
+            """
+        else:
+            items_struct_type = ydb.StructType()
+            items_struct_type.add_member("id", ydb.PrimitiveType.Uint64)
+            items_struct_type.add_member("embedding", ydb.PrimitiveType.String)
+            query = f"""
+            DECLARE $items AS List<Struct<
+                id: Uint64,
+                embedding: String
+            >>;
 
-        UPSERT INTO `{self.table_name}` (id, embedding)
-        SELECT id, embedding
-        FROM AS_TABLE($items);
-        """
+            UPSERT INTO `{self.table_name}` (id, embedding)
+            SELECT id, embedding
+            FROM AS_TABLE($items);
+            """
 
         inserted = 0
         for offset in range(0, len(embeddings), batch_size):
             end = min(offset + batch_size, len(embeddings))
-            items = [
-                {
-                    "id": metadata[i],
-                    "embedding": convert_vector_to_bytes(embeddings[i]),
-                }
-                for i in range(offset, end)
-            ]
+            if self.with_scalar_labels:
+                items = [
+                    {
+                        "id": metadata[i],
+                        "embedding": convert_vector_to_bytes(embeddings[i]),
+                        YDB_LABEL_FIELD: labels_data[i],
+                    }
+                    for i in range(offset, end)
+                ]
+            else:
+                items = [
+                    {
+                        "id": metadata[i],
+                        "embedding": convert_vector_to_bytes(embeddings[i]),
+                    }
+                    for i in range(offset, end)
+                ]
             self.pool.execute_with_retries(
                 query,
                 {"$items": (items, ydb.ListType(items_struct_type))},
@@ -273,13 +380,14 @@ class YDB(VectorDB):
 
         use_index = self.case_config.create_index_after_load
         view_clause = f"VIEW {self.index_name}" if use_index else ""
+        where_clause = f"\n        {self._where_clause}" if self._where_clause else ""
 
         yql = f"""
         PRAGMA ydb.KMeansTreeSearchTopSize = "{top_clusters}";
         DECLARE $embedding AS String;
 
         SELECT id
-        FROM `{self.table_name}` {view_clause}
+        FROM `{self.table_name}` {view_clause}{where_clause}
         ORDER BY Knn::{knn_function}(embedding, $embedding) {sort_order}
         LIMIT {k};
         """

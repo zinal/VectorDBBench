@@ -6,12 +6,14 @@ import pytest
 
 from vectordb_bench.backend.clients import DB
 from vectordb_bench.backend.clients.api import MetricType
+from vectordb_bench.backend.filter import FilterOp
 from vectordb_bench.backend.clients.ydb.config import (
     YDBConfig,
     YDBIndexConfig,
     compute_kmeans_tree_params,
 )
 from vectordb_bench.backend.clients.ydb.ydb_client import YDB
+from vectordb_bench.backend.filter import IntFilter
 
 
 def _integration_db_config() -> dict:
@@ -50,6 +52,23 @@ class TestYDBConfig:
         ip = YDBIndexConfig(metric_type=MetricType.IP)
         assert ip.index_strategy() == "similarity=inner_product"
         assert ip.knn_function() == "InnerProductSimilarity"
+
+    def test_default_search_top_size(self):
+        cfg = YDBIndexConfig()
+        assert cfg.num_leaves_to_search == 10
+        assert cfg.search_param()["kmeans_tree_search_top_size"] == 10
+
+    def test_index_on_columns(self):
+        from vectordb_bench.backend.filter import IntFilter, LabelFilter, non_filter
+
+        cfg = YDBIndexConfig()
+        assert cfg.index_on_columns(non_filter) == ("embedding",)
+        assert cfg.index_on_columns(IntFilter(int_value=100, filter_rate=0.01)) == ("id", "embedding")
+        assert cfg.index_on_columns(LabelFilter(label_percentage=0.01)) == ("labels", "embedding")
+
+    def test_cover_clause(self):
+        assert YDBIndexConfig(cover_embedding=True).cover_clause() == "COVER (embedding)"
+        assert YDBIndexConfig(cover_embedding=False).cover_clause() == ""
 
 
 class TestYDBAuth:
@@ -101,6 +120,17 @@ class TestYDBAuth:
             from_env.assert_called_once_with()
 
 
+class TestYDBFilters:
+    def test_prepare_filter_int(self):
+        client = YDB.__new__(YDB)
+        client.prepare_filter(IntFilter(int_value=12345, filter_rate=0.01))
+        assert client._where_clause == "WHERE id >= 12345"
+
+    def test_supported_filter_types(self):
+        assert FilterOp.NumGE in YDB.supported_filter_types
+        assert FilterOp.StrEqual in YDB.supported_filter_types
+
+
 @pytest.mark.integration
 class TestYDBClient:
     @pytest.fixture
@@ -117,7 +147,6 @@ class TestYDBClient:
                     metric_type=MetricType.COSINE,
                     levels=1,
                     clusters=8,
-                    kmeans_tree_search_top_size=3,
                 ),
                 collection_name="vdbbench_ydb_test",
                 drop_old=True,
