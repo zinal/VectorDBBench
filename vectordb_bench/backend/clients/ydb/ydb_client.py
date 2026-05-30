@@ -107,7 +107,7 @@ class YDB(VectorDB):
         if root_certificates is None:
             log.warning("YDB SSL root certificate file not found: %s", path)
             return None
-        log.info("Using YDB SSL root certificate from %s", path)
+        log.debug("Using YDB SSL root certificate from %s", path)
         return root_certificates
 
     @staticmethod
