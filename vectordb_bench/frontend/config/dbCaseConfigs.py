@@ -1732,6 +1732,39 @@ CaseConfigParamInput_VectorSearchBeamSize_CockroachDB = CaseConfigInput(
     },
 )
 
+CaseConfigParamInput_Level_YDB = CaseConfigInput(
+    label=CaseConfigParamType.level,
+    inputHelp="vector_kmeans_tree levels (empty = auto from dataset size)",
+    inputType=InputType.Number,
+    inputConfig={
+        "min": 1,
+        "max": 4,
+        "value": None,
+    },
+)
+
+CaseConfigParamInput_Nlist_YDB = CaseConfigInput(
+    label=CaseConfigParamType.Nlist,
+    inputHelp="Clusters per tree level (empty = auto, recommended 20-512)",
+    inputType=InputType.Number,
+    inputConfig={
+        "min": 3,
+        "max": 512,
+        "value": None,
+    },
+)
+
+CaseConfigParamInput_NumLeavesToSearch_YDB = CaseConfigInput(
+    label=CaseConfigParamType.numLeavesToSearch,
+    inputHelp="PRAGMA ydb.KMeansTreeSearchTopSize (higher = better recall)",
+    inputType=InputType.Number,
+    inputConfig={
+        "min": 1,
+        "max": 32,
+        "value": 3,
+    },
+)
+
 CaseConfigParamInput_IndexType_MariaDB = CaseConfigInput(
     label=CaseConfigParamType.IndexType,
     inputHelp="Select Index Type",
@@ -2387,6 +2420,13 @@ CockroachDBPerformanceConfig = [
     CaseConfigParamInput_BuildBeamSize_CockroachDB,
     CaseConfigParamInput_VectorSearchBeamSize_CockroachDB,
 ]
+
+YDBLoadingConfig = [
+    CaseConfigParamInput_Level_YDB,
+    CaseConfigParamInput_Nlist_YDB,
+    CaseConfigParamInput_NumLeavesToSearch_YDB,
+]
+YDBPerformanceConfig = YDBLoadingConfig
 
 OceanBaseLoadConfig = [
     CaseConfigParamInput_IndexType_OceanBase,
@@ -3051,6 +3091,10 @@ CASE_CONFIG_MAP = {
     DB.CockroachDB: {
         CaseLabel.Load: CockroachDBLoadingConfig,
         CaseLabel.Performance: CockroachDBPerformanceConfig,
+    },
+    DB.YDB: {
+        CaseLabel.Load: YDBLoadingConfig,
+        CaseLabel.Performance: YDBPerformanceConfig,
     },
     DB.OceanBase: {
         CaseLabel.Load: OceanBaseLoadConfig,
