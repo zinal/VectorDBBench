@@ -109,7 +109,11 @@ class YDB(VectorDB):
             if not user:
                 msg = f"auth_mode=login requires --user or ${YDB_USER_ENV}"
                 raise ValueError(msg)
-            return ydb.StaticCredentials(user, password)
+            driver_config = ydb.DriverConfig(
+                endpoint=db_config["endpoint"],
+                database=db_config.get("database"),
+            )
+            return ydb.StaticCredentials(driver_config, user, password)
 
         if YDB._has_sdk_credentials_env():
             return ydb.credentials_from_env_variables()

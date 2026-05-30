@@ -211,17 +211,29 @@ class TestYDBAuth:
         monkeypatch.setenv("YDB_USER", "bench")
         monkeypatch.setenv("YDB_PASSWORD", "secret")
 
-        with patch("ydb.StaticCredentials") as static_credentials:
-            YDB._build_credentials({"auth_mode": "env", "user": "", "password": ""})
-            static_credentials.assert_called_once_with("bench", "secret")
+        with patch("ydb.StaticCredentials") as static_credentials, patch("ydb.DriverConfig") as driver_config_cls:
+            YDB._build_credentials(
+                {"auth_mode": "env", "user": "", "password": "", "endpoint": "grpc://localhost:2136", "database": "/local"}
+            )
+            driver_config_cls.assert_called_once_with(endpoint="grpc://localhost:2136", database="/local")
+            static_credentials.assert_called_once_with(driver_config_cls.return_value, "bench", "secret")
 
     def test_build_credentials_login_mode_cli_overrides_env(self, monkeypatch):
         monkeypatch.setenv("YDB_USER", "env-user")
         monkeypatch.setenv("YDB_PASSWORD", "env-pass")
 
-        with patch("ydb.StaticCredentials") as static_credentials:
-            YDB._build_credentials({"auth_mode": "login", "user": "cli-user", "password": "cli-pass"})
-            static_credentials.assert_called_once_with("cli-user", "cli-pass")
+        with patch("ydb.StaticCredentials") as static_credentials, patch("ydb.DriverConfig") as driver_config_cls:
+            YDB._build_credentials(
+                {
+                    "auth_mode": "login",
+                    "user": "cli-user",
+                    "password": "cli-pass",
+                    "endpoint": "grpc://localhost:2136",
+                    "database": "/Root",
+                }
+            )
+            driver_config_cls.assert_called_once_with(endpoint="grpc://localhost:2136", database="/Root")
+            static_credentials.assert_called_once_with(driver_config_cls.return_value, "cli-user", "cli-pass")
 
     def test_build_credentials_login_mode_requires_user(self):
         with pytest.raises(ValueError, match="YDB_USER"):
