@@ -85,8 +85,8 @@ class TestYDBConfig:
         cfg = YDBConfig()
         assert cfg.auto_partitioning_min_partitions_count == 1000
         assert cfg.auto_partitioning_max_partitions_count == 1100
-        assert cfg.auto_partitioning_table_partition_size_mb == 500
-        assert cfg.auto_partitioning_index_partition_size_mb == 200
+        assert cfg.auto_partitioning_table_partition_size_mb == 1000
+        assert cfg.auto_partitioning_index_partition_size_mb == 1000
         assert cfg.table_name == ""
         assert cfg.operation_timeout_seconds == 24 * 3600
 
@@ -126,7 +126,7 @@ class TestYDBTableDDL:
         ddl = client._create_table_with_clause()
         assert "AUTO_PARTITIONING_BY_SIZE = ENABLED" in ddl
         assert "AUTO_PARTITIONING_BY_LOAD = ENABLED" in ddl
-        assert "AUTO_PARTITIONING_PARTITION_SIZE_MB = 500" in ddl
+        assert "AUTO_PARTITIONING_PARTITION_SIZE_MB = 1000" in ddl
         assert "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = 1000" in ddl
         assert "AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = 1100" in ddl
 
@@ -188,7 +188,7 @@ class TestYDBTableDDL:
         client = self._make_client()
         client.case_config = YDBIndexConfig(cover_embedding=True)
         settings = client._index_partitioning_settings_sql()
-        assert "AUTO_PARTITIONING_PARTITION_SIZE_MB = 200" in settings
+        assert "AUTO_PARTITIONING_PARTITION_SIZE_MB = 1000" in settings
         assert "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = 1000" in settings
 
 

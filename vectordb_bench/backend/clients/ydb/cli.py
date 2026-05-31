@@ -166,7 +166,7 @@ class YDBTypedDict(CommonTypedDict):
         click.option(
             "--auto-partitioning-table-partition-size-mb",
             type=int,
-            default=500,
+            default=1000,
             show_default=True,
             help="AUTO_PARTITIONING_PARTITION_SIZE_MB for the main data table",
         ),
@@ -176,7 +176,7 @@ class YDBTypedDict(CommonTypedDict):
         click.option(
             "--auto-partitioning-index-partition-size-mb",
             type=int,
-            default=200,
+            default=1000,
             show_default=True,
             help="AUTO_PARTITIONING_PARTITION_SIZE_MB for vector index internal tables",
         ),

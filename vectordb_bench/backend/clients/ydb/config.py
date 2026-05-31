@@ -39,8 +39,8 @@ class YDBConfig(DBConfig):
     ssl_root_certificates_file: str = ""
     auto_partitioning_min_partitions_count: int = 1000
     auto_partitioning_max_partitions_count: int = 1100
-    auto_partitioning_table_partition_size_mb: int = 500
-    auto_partitioning_index_partition_size_mb: int = 200
+    auto_partitioning_table_partition_size_mb: int = 1000
+    auto_partitioning_index_partition_size_mb: int = 1000
     operation_timeout_seconds: int = 24 * 3600
 
     @model_validator(mode="after")
