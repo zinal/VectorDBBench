@@ -302,16 +302,24 @@ class YDB(VectorDB):
     def _index_on_sql(self) -> str:
         return ", ".join(self._resolved_index_on_columns())
 
-    def _add_vector_index(self, pool, levels: int, clusters: int) -> None:
+    def _add_vector_index(self, pool) -> None:
         import ydb
 
         index_param = self.case_config.index_param(self.filters, with_scalar_labels=self.with_scalar_labels)
         strategy = index_param["strategy"]
         temp_index_name = f"{self.index_name}__temp"
-        overlap_clusters = index_param.get("overlap_clusters", 3)
         on_sql = self._index_on_sql()
         cover_clause = index_param.get("cover_clause", "")
         cover_sql = f" {cover_clause}" if cover_clause else ""
+
+        kmeans_options: list[str] = []
+        for key in ("levels", "clusters", "overlap_clusters"):
+            value = index_param.get(key)
+            if value is not None:
+                kmeans_options.append(f"{key}={value}")
+        kmeans_options_sql = (
+            ",\n                " + ",\n                ".join(kmeans_options) if kmeans_options else ""
+        )
 
         ddl_settings = self._operation_settings(self.db_config)
         pool.execute_with_retries(
@@ -323,10 +331,7 @@ class YDB(VectorDB):
             WITH (
                 {strategy},
                 vector_type="float",
-                vector_dimension={self.dim},
-                levels={levels},
-                clusters={clusters},
-                overlap_clusters={overlap_clusters}
+                vector_dimension={self.dim}{kmeans_options_sql}
             );
             """,
             settings=ddl_settings,
@@ -345,13 +350,12 @@ class YDB(VectorDB):
             settings=ddl_settings,
         )
         log.info(
-            "Created vector index %s on %s ON (%s)%s (levels=%d, clusters=%d)",
+            "Created vector index %s on %s ON (%s)%s (kmeans_tree options: %s)",
             self.index_name,
             self.table_name,
             on_sql,
             cover_sql,
-            levels,
-            clusters,
+            ", ".join(kmeans_options) if kmeans_options else "server defaults",
         )
 
     def _wait_for_index(self, pool) -> None:
@@ -391,14 +395,14 @@ class YDB(VectorDB):
             log.info("Skipping vector index build (create_index_after_load=False)")
             return
 
-        levels, clusters = self.case_config.resolved_index_params(data_size)
         log.info(
-            "Building YDB vector index for %d rows: levels=%d, clusters=%d",
+            "Building YDB vector index for %d rows: levels=%s, clusters=%s, overlap_clusters=%s",
             data_size or 0,
-            levels,
-            clusters,
+            self.case_config.level,
+            self.case_config.nlist,
+            self.case_config.overlap_clusters,
         )
-        self._add_vector_index(self.pool, levels=levels, clusters=clusters)
+        self._add_vector_index(self.pool)
         self._wait_for_index(self.pool)
         self._configure_index_table_partitioning(self.pool)
 

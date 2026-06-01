@@ -10,7 +10,6 @@ from vectordb_bench.backend.filter import FilterOp
 from vectordb_bench.backend.clients.ydb.config import (
     YDBConfig,
     YDBIndexConfig,
-    compute_kmeans_tree_params,
 )
 from vectordb_bench.backend.clients.ydb.ydb_client import YDB
 from vectordb_bench.backend.filter import IntFilter, non_filter
@@ -25,20 +24,19 @@ def _integration_db_config() -> dict:
 
 
 class TestYDBConfig:
-    def test_compute_kmeans_tree_params_small_dataset(self):
-        levels, clusters = compute_kmeans_tree_params(50_000)
-        assert levels == 1
-        assert 20 <= clusters <= 512
+    def test_index_param_omits_unset_kmeans_options(self):
+        cfg = YDBIndexConfig()
+        params = cfg.index_param()
+        assert params["levels"] is None
+        assert params["clusters"] is None
+        assert params["overlap_clusters"] is None
 
-    def test_compute_kmeans_tree_params_medium_dataset(self):
-        levels, clusters = compute_kmeans_tree_params(500_000)
-        assert levels == 2
-        assert clusters >= 20
-
-    def test_compute_kmeans_tree_params_large_dataset(self):
-        levels, clusters = compute_kmeans_tree_params(10_000_000)
-        assert levels == 3
-        assert clusters >= 20
+    def test_index_param_passes_explicit_values(self):
+        cfg = YDBIndexConfig(levels=2, clusters=64, overlap_clusters=5)
+        params = cfg.index_param()
+        assert params["levels"] == 2
+        assert params["clusters"] == 64
+        assert params["overlap_clusters"] == 5
 
     def test_metric_mapping(self):
         cosine = YDBIndexConfig(metric_type=MetricType.COSINE)
@@ -77,9 +75,10 @@ class TestYDBConfig:
         assert YDBIndexConfig(cover_embedding=False).cover_clause() == ""
 
     def test_zero_means_auto_for_index_shape(self):
-        cfg = YDBIndexConfig(level=0, nlist=0)
+        cfg = YDBIndexConfig(level=0, nlist=0, overlap_clusters=0)
         assert cfg.level is None
         assert cfg.nlist is None
+        assert cfg.overlap_clusters is None
 
     def test_auto_partitioning_defaults(self):
         cfg = YDBConfig()
@@ -191,6 +190,51 @@ class TestYDBTableDDL:
         assert "AUTO_PARTITIONING_PARTITION_SIZE_MB = 1000" in settings
         assert "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = 1000" in settings
 
+    def _capture_add_index_sql(self, client: YDB) -> str:
+        captured: dict[str, str] = {}
+
+        class _Pool:
+            def execute_with_retries(self, query, *args, **kwargs):
+                captured["query"] = query
+
+        client.dim = 4
+        client.driver = MagicMock()
+        client.driver._driver_config.database = "/local"
+        client.driver.table_client.alter_table = MagicMock()
+        with patch("ydb.RenameIndexItem"):
+            client._add_vector_index(_Pool())
+        return captured["query"]
+
+    def test_add_vector_index_omits_unset_kmeans_options(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        sql = self._capture_add_index_sql(client)
+        assert "levels=" not in sql
+        assert "clusters=" not in sql
+        assert "overlap_clusters=" not in sql
+        assert "vector_dimension=4" in sql
+
+    def test_add_vector_index_includes_explicit_kmeans_options(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(
+            metric_type=MetricType.COSINE,
+            levels=2,
+            clusters=64,
+            overlap_clusters=5,
+        )
+        sql = self._capture_add_index_sql(client)
+        assert "levels=2" in sql
+        assert "clusters=64" in sql
+        assert "overlap_clusters=5" in sql
+
+    def test_add_vector_index_partial_kmeans_options(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE, levels=3)
+        sql = self._capture_add_index_sql(client)
+        assert "levels=3" in sql
+        assert "clusters=" not in sql
+        assert "overlap_clusters=" not in sql
+
 
 class TestYDBUIConfig:
     def test_ydb_is_in_ui_db_list(self):
@@ -208,7 +252,7 @@ class TestYDBUIConfig:
             for c in get_case_config_inputs(DB.YDB, CaseLabel.Performance)
         }
         inst = DB.YDB.case_config_cls(None)(**ui_cfg)
-        assert inst.overlap_clusters == 3
+        assert inst.overlap_clusters is None
         assert inst.num_leaves_to_search == 10
         assert inst.level is None
         assert inst.nlist is None

@@ -1734,7 +1734,7 @@ CaseConfigParamInput_VectorSearchBeamSize_CockroachDB = CaseConfigInput(
 
 CaseConfigParamInput_Level_YDB = CaseConfigInput(
     label=CaseConfigParamType.level,
-    inputHelp="vector_kmeans_tree levels (0 = auto from dataset size)",
+    inputHelp="vector_kmeans_tree levels (0 = omit from DDL; YDB server default applies)",
     inputType=InputType.Number,
     inputConfig={
         "min": 0,
@@ -1745,7 +1745,7 @@ CaseConfigParamInput_Level_YDB = CaseConfigInput(
 
 CaseConfigParamInput_Nlist_YDB = CaseConfigInput(
     label=CaseConfigParamType.Nlist,
-    inputHelp="Clusters per tree level (0 = auto, recommended 20-512)",
+    inputHelp="Clusters per tree level (0 = omit from DDL; YDB server default applies)",
     inputType=InputType.Number,
     inputConfig={
         "min": 0,
@@ -1777,12 +1777,12 @@ CaseConfigParamInput_CoverEmbedding_YDB = CaseConfigInput(
 
 CaseConfigParamInput_OverlapClusters_YDB = CaseConfigInput(
     label=CaseConfigParamType.overlap_clusters,
-    inputHelp="vector_kmeans_tree overlap_clusters (higher = better recall, larger index)",
+    inputHelp="vector_kmeans_tree overlap_clusters (0 = omit from DDL; YDB server default applies)",
     inputType=InputType.Number,
     inputConfig={
-        "min": 1,
+        "min": 0,
         "max": 32,
-        "value": 3,
+        "value": 0,
     },
 )
 
