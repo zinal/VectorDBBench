@@ -394,6 +394,16 @@ YDB-specific behaviour:
 vectordbbench ydb --help
 ```
 
+#### Automated index parameter tuning
+
+For a structured QPS + Recall tradeoff study (comparable to published leaderboard results), use `ydb-tune`:
+
+```shell
+vectordbbench ydb-tune --config-file ydb_tune_config.yml
+```
+
+See [docs/ydb-index-tuning.md](docs/ydb-index-tuning.md) for the full tuning plan, parameter semantics, and baseline comparison workflow.
+
 ### Run OceanBase from command line
 
 Execute tests for the index types: HNSW, HNSW_SQ, or HNSW_BQ.
