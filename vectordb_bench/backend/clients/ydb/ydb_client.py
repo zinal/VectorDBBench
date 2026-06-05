@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import posixpath
 import struct
 import time
 from contextlib import contextmanager
@@ -28,6 +30,8 @@ YDB_INDEX_WAIT_TIMEOUT_SECONDS = 7200
 YDB_DEFAULT_TABLE_PARTITION_SIZE_MB = 1000
 YDB_DEFAULT_INDEX_PARTITION_SIZE_MB = 1000
 YDB_DEFAULT_OPERATION_TIMEOUT_SECONDS = 24 * 3600
+YDB_DEFAULT_BULK_UPSERT_BATCH_SIZE = 1000
+YDB_DEFAULT_BULK_UPSERT_CONCURRENCY = 10
 YDB_INDEX_IMPL_LEVEL_TABLE = "indexImplLevelTable"
 YDB_INDEX_IMPL_POSTING_TABLE = "indexImplPostingTable"
 YDB_INDEX_IMPL_PREFIX_TABLE = "indexImplPrefixTable"
@@ -419,6 +423,85 @@ class YDB(VectorDB):
             msg = f"Unsupported filter type for YDB: {filters.type}"
             raise ValueError(msg)
 
+    def _table_path(self) -> str:
+        database = self.db_config.get("database")
+        if not database and self.driver is not None:
+            database = self.driver._driver_config.database
+        if not database:
+            msg = "YDB database path is required for BulkUpsert"
+            raise ValueError(msg)
+        return posixpath.join(database, self.table_name)
+
+    def _bulk_upsert_column_types(self):
+        import ydb
+
+        columns = ydb.BulkUpsertColumns()
+        columns.add_column("id", ydb.PrimitiveType.Uint64)
+        columns.add_column("embedding", ydb.PrimitiveType.String)
+        if self.with_scalar_labels:
+            columns.add_column(YDB_LABEL_FIELD, ydb.PrimitiveType.Utf8)
+        return columns
+
+    def _bulk_upsert_rows_slice(
+        self,
+        embeddings: list[list[float]],
+        metadata: list[int],
+        offset: int,
+        end: int,
+        labels_data: list[str] | None,
+    ) -> list[dict[str, Any]]:
+        if self.with_scalar_labels:
+            return [
+                {
+                    "id": metadata[i],
+                    "embedding": convert_vector_to_bytes(embeddings[i]),
+                    YDB_LABEL_FIELD: labels_data[i],
+                }
+                for i in range(offset, end)
+            ]
+        return [
+            {
+                "id": metadata[i],
+                "embedding": convert_vector_to_bytes(embeddings[i]),
+            }
+            for i in range(offset, end)
+        ]
+
+    def _bulk_upsert_batch_size(self) -> int:
+        return int(self.db_config.get("bulk_upsert_batch_size", YDB_DEFAULT_BULK_UPSERT_BATCH_SIZE))
+
+    def _bulk_upsert_concurrency(self) -> int:
+        return int(self.db_config.get("bulk_upsert_concurrency", YDB_DEFAULT_BULK_UPSERT_CONCURRENCY))
+
+    async def _bulk_upsert_batches_async(
+        self,
+        batches: list[list[dict[str, Any]]],
+        column_types: Any,
+    ) -> None:
+        import ydb
+
+        credentials = self._build_credentials(self.db_config)
+        driver = ydb.aio.Driver(driver_config=self._driver_config(self.db_config, credentials))
+        await driver.wait(timeout=5, fail_fast=True)
+        settings = self._operation_settings(self.db_config)
+        table_path = self._table_path()
+        concurrency = self._bulk_upsert_concurrency()
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def upsert_batch(rows: list[dict[str, Any]]) -> None:
+            async with semaphore:
+                await driver.table_client.bulk_upsert(
+                    table_path,
+                    rows,
+                    column_types,
+                    settings=settings,
+                )
+
+        try:
+            await asyncio.gather(*(upsert_batch(batch) for batch in batches))
+        finally:
+            await driver.stop()
+
     def insert_embeddings(
         self,
         embeddings: list[list[float]],
@@ -426,8 +509,6 @@ class YDB(VectorDB):
         labels_data: list[str] | None = None,
         **kwargs: Any,
     ) -> tuple[int, Exception]:
-        import ydb
-
         if not embeddings:
             return 0, None
 
@@ -439,65 +520,24 @@ class YDB(VectorDB):
                 msg = "labels_data length must match metadata length"
                 raise ValueError(msg)
 
-        batch_size = 1000
-        if self.with_scalar_labels:
-            items_struct_type = ydb.StructType()
-            items_struct_type.add_member("id", ydb.PrimitiveType.Uint64)
-            items_struct_type.add_member("embedding", ydb.PrimitiveType.String)
-            items_struct_type.add_member(YDB_LABEL_FIELD, ydb.PrimitiveType.Utf8)
-            query = f"""
-            DECLARE $items AS List<Struct<
-                id: Uint64,
-                embedding: String,
-                {YDB_LABEL_FIELD}: Utf8
-            >>;
+        batch_size = self._bulk_upsert_batch_size()
+        batches = [
+            self._bulk_upsert_rows_slice(embeddings, metadata, offset, min(offset + batch_size, len(embeddings)), labels_data)
+            for offset in range(0, len(embeddings), batch_size)
+        ]
+        concurrency = self._bulk_upsert_concurrency()
+        log.info(
+            "YDB BulkUpsert into %s: %d rows in %d batches (batch_size=%d, concurrency=%d)",
+            self._table_path(),
+            len(embeddings),
+            len(batches),
+            batch_size,
+            concurrency,
+        )
 
-            UPSERT INTO `{self.table_name}` (id, embedding, {YDB_LABEL_FIELD})
-            SELECT id, embedding, {YDB_LABEL_FIELD}
-            FROM AS_TABLE($items);
-            """
-        else:
-            items_struct_type = ydb.StructType()
-            items_struct_type.add_member("id", ydb.PrimitiveType.Uint64)
-            items_struct_type.add_member("embedding", ydb.PrimitiveType.String)
-            query = f"""
-            DECLARE $items AS List<Struct<
-                id: Uint64,
-                embedding: String
-            >>;
-
-            UPSERT INTO `{self.table_name}` (id, embedding)
-            SELECT id, embedding
-            FROM AS_TABLE($items);
-            """
-
-        inserted = 0
-        for offset in range(0, len(embeddings), batch_size):
-            end = min(offset + batch_size, len(embeddings))
-            if self.with_scalar_labels:
-                items = [
-                    {
-                        "id": metadata[i],
-                        "embedding": convert_vector_to_bytes(embeddings[i]),
-                        YDB_LABEL_FIELD: labels_data[i],
-                    }
-                    for i in range(offset, end)
-                ]
-            else:
-                items = [
-                    {
-                        "id": metadata[i],
-                        "embedding": convert_vector_to_bytes(embeddings[i]),
-                    }
-                    for i in range(offset, end)
-                ]
-            self.pool.execute_with_retries(
-                query,
-                {"$items": (items, ydb.ListType(items_struct_type))},
-            )
-            inserted += len(items)
-
-        return inserted, None
+        column_types = self._bulk_upsert_column_types()
+        asyncio.run(self._bulk_upsert_batches_async(batches, column_types))
+        return len(embeddings), None
 
     def search_embedding(
         self,
