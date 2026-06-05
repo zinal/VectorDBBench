@@ -1,0 +1,36 @@
+# YDB vector index tuning — maximize QPS at Recall@100 >= 0.90
+#
+# Usage:
+#   export YDB_ENDPOINT=grpc://your-host:2136
+#   export YDB_DATABASE=/Root/your_db
+#   vectordbbench ydb-tune --config-file ydb_tune_recall90.yml
+#
+# If data and index are already loaded:
+#   vectordbbench ydb-tune --config-file ydb_tune_recall90.yml \
+#     --skip-load --skip-drop-old --table-name YOUR_TABLE_NAME
+
+case_type: Performance768D1M
+task_label: ydb_tune_r90
+db_label: ydb-r90
+
+endpoint: grpc://localhost:2136
+database: /Root/test
+
+# Target: minimum top_size that reaches recall >= 0.90 (max QPS on the constraint)
+target_recall: 0.90
+min_recall: 0.90
+
+search_top_size_values: [1, 2, 3, 5, 8, 10, 15, 20, 32, 48, 64]
+
+index_build_grid:
+  - {}
+
+cover_embedding: true
+finalize_top_n: 3
+
+baseline_task_labels:
+  - standard_20260403
+
+output_dir: ./ydb_tune_results
+
+extra_cli_args: []
