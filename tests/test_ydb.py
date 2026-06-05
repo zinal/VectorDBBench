@@ -115,7 +115,7 @@ class TestYDBTableDDL:
             auto_partitioning_max_partitions_count=1100,
         ).to_dict()
         client.table_name = "bench_table"
-        client.index_name = "bench_table_vector_idx"
+        client.index_name = "vector_idx"
         client.filters = non_filter
         client.with_scalar_labels = False
         return client
@@ -134,15 +134,15 @@ class TestYDBTableDDL:
         client.case_config = YDBIndexConfig(cover_embedding=True)
         client.filters = non_filter
         assert client._index_impl_table_paths() == [
-            "bench_table/bench_table_vector_idx/indexImplLevelTable",
-            "bench_table/bench_table_vector_idx/indexImplPostingTable",
+            "bench_table/vector_idx/indexImplLevelTable",
+            "bench_table/vector_idx/indexImplPostingTable",
         ]
 
     def test_index_impl_tables_without_cover(self):
         client = self._make_client()
         client.case_config = YDBIndexConfig(cover_embedding=False)
         assert client._index_impl_table_paths() == [
-            "bench_table/bench_table_vector_idx/indexImplLevelTable",
+            "bench_table/vector_idx/indexImplLevelTable",
         ]
 
     def test_index_impl_tables_with_filter_prefix(self):
@@ -150,9 +150,9 @@ class TestYDBTableDDL:
         client.case_config = YDBIndexConfig(cover_embedding=True)
         client.filters = IntFilter(int_value=100, filter_rate=0.01)
         assert client._index_impl_table_paths() == [
-            "bench_table/bench_table_vector_idx/indexImplLevelTable",
-            "bench_table/bench_table_vector_idx/indexImplPostingTable",
-            "bench_table/bench_table_vector_idx/indexImplPrefixTable",
+            "bench_table/vector_idx/indexImplLevelTable",
+            "bench_table/vector_idx/indexImplPostingTable",
+            "bench_table/vector_idx/indexImplPrefixTable",
         ]
 
     def test_index_on_sql_for_label_table(self):
@@ -178,9 +178,9 @@ class TestYDBTableDDL:
         client.filters = LabelFilter(label_percentage=0.01)
         client.case_config = YDBIndexConfig(cover_embedding=True)
         assert client._index_impl_table_paths() == [
-            "bench_table/bench_table_vector_idx/indexImplLevelTable",
-            "bench_table/bench_table_vector_idx/indexImplPostingTable",
-            "bench_table/bench_table_vector_idx/indexImplPrefixTable",
+            "bench_table/vector_idx/indexImplLevelTable",
+            "bench_table/vector_idx/indexImplPostingTable",
+            "bench_table/vector_idx/indexImplPrefixTable",
         ]
 
     def test_configure_index_table_partitioning_sql(self):
@@ -191,19 +191,48 @@ class TestYDBTableDDL:
         assert "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = 1000" in settings
 
     def _capture_add_index_sql(self, client: YDB) -> str:
+        import sys
+
         captured: dict[str, str] = {}
 
         class _Pool:
             def execute_with_retries(self, query, *args, **kwargs):
-                captured["query"] = query
+                if "ADD INDEX" in query:
+                    captured["query"] = query
 
         client.dim = 4
         client.driver = MagicMock()
         client.driver._driver_config.database = "/local"
         client.driver.table_client.alter_table = MagicMock()
-        with patch("ydb.RenameIndexItem"):
+        mock_ydb = MagicMock()
+        with patch.dict(sys.modules, {"ydb": mock_ydb}), patch.object(
+            YDB, "_operation_settings", return_value=MagicMock()
+        ):
             client._add_vector_index(_Pool())
         return captured["query"]
+
+    def test_add_vector_index_uses_unique_temp_name(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        sql = self._capture_add_index_sql(client)
+        assert "ADD INDEX vector_idx__temp_" in sql
+
+    def test_drop_vector_indexes_issues_drop_for_final_and_legacy_temp(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        queries: list[str] = []
+
+        class _Pool:
+            def execute_with_retries(self, query, *args, **kwargs):
+                queries.append(query)
+
+        with patch.object(YDB, "_operation_settings", return_value=MagicMock()):
+            client._drop_vector_indexes(_Pool())
+        assert len(queries) == 4
+        assert "DROP INDEX `vector_idx`" in queries[0]
+        assert "DROP INDEX `vector_idx__temp`" in queries[1]
+        assert "DROP INDEX `bench_table_vector_idx`" in queries[2]
+        assert "DROP INDEX `bench_table_vector_idx__temp`" in queries[3]
 
     def test_add_vector_index_omits_unset_kmeans_options(self):
         client = self._make_client()
@@ -398,7 +427,7 @@ class TestYDBPickle:
         client.db_config = YDBConfig().to_dict()
         client.case_config = YDBIndexConfig()
         client.table_name = "bench_table"
-        client.index_name = "bench_table_vector_idx"
+        client.index_name = "vector_idx"
         client.dim = 768
         client.filters = non_filter
         client.with_scalar_labels = False
