@@ -1,0 +1,48 @@
+# YDB build-param grid — try to reach Recall@100 >= 0.90 at lower top_size (higher QPS)
+#
+# Baseline from first run (overlap_clusters=4, server-default levels/clusters):
+#   recall >= 0.90 at top_size=52, QPS ~697
+#
+# Each grid entry = full DROP + LOAD + INDEX BUILD + search sweep + binary search + finalize.
+# Expect ~20 min load/build + ~1–2 h tuning per entry.
+#
+# Run all variants:
+#   ./Tune.sh --config-file ydb_tune_build_grid.yml --target-recall 0.90
+#
+# Run one variant only — keep a single entry in index_build_grid (see comments below).
+
+case_type: Performance768D1M
+task_label: ydb_tune_r90_build
+db_label: ydb-r90-build
+
+target_recall: 0.90
+min_recall: 0.90
+
+search_top_size_values: [1, 2, 3, 5, 8, 10, 15, 20, 32, 40, 48, 56, 64]
+
+# Coarse grid: skip baseline (already measured). Order = most promising first.
+index_build_grid:
+  # Best balance: deeper tree + moderate branching
+  - levels: 3
+    clusters: 512
+    overlap_clusters: 4
+
+  # Maximum quality (longest build)
+  - levels: 3
+    clusters: 1024
+    overlap_clusters: 4
+
+  # Shallower tree, wider branching (faster build, check if enough)
+  - levels: 2
+    clusters: 512
+    overlap_clusters: 4
+
+cover_embedding: true
+finalize_top_n: 2
+
+baseline_task_labels:
+  - standard_20260403
+
+output_dir: ./ydb_tune_results
+
+extra_cli_args: []
