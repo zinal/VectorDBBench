@@ -19,6 +19,7 @@ import yaml
 from vectordb_bench import config as bench_config
 from vectordb_bench.backend.cases import CaseType
 from vectordb_bench.backend.clients import DB
+from vectordb_bench.models import ResultLabel
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,13 @@ def _resolve_config_file(path: str) -> Path:
     raise click.BadParameter(msg)
 
 
+def _table_name_for_build(tune: TuneConfig, build_idx: int) -> str:
+    if tune.table_name:
+        return tune.table_name
+    base = CaseType[tune.case_type].name.lower()
+    return f"{base}_b{build_idx}"
+
+
 def _case_id(case_type: str) -> int:
     try:
         return CaseType[case_type].value
@@ -106,6 +114,7 @@ def _build_cli_args(
     drop_old: bool,
     search_serial: bool,
     search_concurrent: bool,
+    table_name: str = "",
 ) -> list[str]:
     args = [
         "ydb",
@@ -122,8 +131,9 @@ def _build_cli_args(
         args.extend(["--endpoint", tune.endpoint])
     if tune.database:
         args.extend(["--database", tune.database])
-    if tune.table_name:
-        args.extend(["--table-name", tune.table_name])
+    effective_table_name = table_name or tune.table_name
+    if effective_table_name:
+        args.extend(["--table-name", effective_table_name])
 
     levels = build.get("levels")
     clusters = build.get("clusters")
@@ -193,7 +203,7 @@ def _wait_for_new_result(since_mtime: float, timeout: float = 7200.0) -> Path | 
     return None
 
 
-def _extract_case_metrics(result_file: Path, case_type: str, db_label: str) -> dict[str, Any] | None:
+def _extract_case_entry(result_file: Path, case_type: str, db_label: str) -> dict[str, Any] | None:
     case_id = _case_id(case_type)
     payload = ujson.loads(result_file.read_text())
     for entry in payload.get("results", []):
@@ -204,8 +214,45 @@ def _extract_case_metrics(result_file: Path, case_type: str, db_label: str) -> d
         db_config = task_config.get("db_config", {})
         if db_config.get("db_label") != db_label:
             continue
-        return entry.get("metrics", {})
+        return entry
     return None
+
+
+def _extract_case_metrics(result_file: Path, case_type: str, db_label: str) -> dict[str, Any] | None:
+    entry = _extract_case_entry(result_file, case_type, db_label)
+    if entry is None:
+        return None
+    return entry.get("metrics", {})
+
+
+def _ensure_benchmark_succeeded(
+    result_file: Path | None,
+    *,
+    case_type: str,
+    db_label: str,
+    phase: str,
+) -> None:
+    if result_file is None:
+        msg = f"No result file produced for {db_label} ({phase})"
+        raise RuntimeError(msg)
+
+    entry = _extract_case_entry(result_file, case_type, db_label)
+    if entry is None:
+        msg = f"No matching result entry for {db_label} in {result_file}"
+        raise RuntimeError(msg)
+
+    label = entry.get("label")
+    if label != ResultLabel.NORMAL.value:
+        metrics = entry.get("metrics", {})
+        msg = f"Benchmark {db_label} ({phase}) failed with label={label!r}, metrics={metrics}"
+        raise RuntimeError(msg)
+
+    if phase == "load":
+        metrics = entry.get("metrics", {})
+        load_duration = metrics.get("load_duration") or 0.0
+        if load_duration <= 0:
+            msg = f"Load phase for {db_label} did not complete successfully (load_duration={load_duration})"
+            raise RuntimeError(msg)
 
 
 def _run_benchmark(
@@ -219,6 +266,7 @@ def _run_benchmark(
     drop_old: bool,
     search_serial: bool,
     search_concurrent: bool,
+    table_name: str = "",
 ) -> TuneRunRecord:
     since = _latest_result_mtime()
     started = time.monotonic()
@@ -231,9 +279,16 @@ def _run_benchmark(
         drop_old=drop_old,
         search_serial=search_serial,
         search_concurrent=search_concurrent,
+        table_name=table_name,
     )
     _run_vectordbbench(cli_args)
     result_file = _wait_for_new_result(since)
+    _ensure_benchmark_succeeded(
+        result_file,
+        case_type=tune.case_type,
+        db_label=db_label,
+        phase=phase,
+    )
     elapsed = time.monotonic() - started
 
     record = TuneRunRecord(
@@ -266,6 +321,7 @@ def _serial_sweep(
     load_first: bool,
     drop_old_first: bool,
     values: list[int],
+    table_name: str,
 ) -> list[TuneRunRecord]:
     records: list[TuneRunRecord] = []
     for idx, top_size in enumerate(values):
@@ -279,6 +335,7 @@ def _serial_sweep(
             drop_old=drop_old_first and idx == 0,
             search_serial=True,
             search_concurrent=False,
+            table_name=table_name,
         )
         records.append(record)
         log.info(
@@ -295,6 +352,8 @@ def _binary_search_top_size(
     build: dict[str, Any],
     bracket: tuple[int, int],
     target: float,
+    *,
+    table_name: str,
 ) -> list[TuneRunRecord]:
     records: list[TuneRunRecord] = []
     lo, hi = bracket
@@ -313,6 +372,7 @@ def _binary_search_top_size(
             drop_old=False,
             search_serial=True,
             search_concurrent=False,
+            table_name=table_name,
         )
         records.append(record)
         tested[top_size] = record.recall
@@ -362,7 +422,13 @@ def _select_finalists(records: list[TuneRunRecord], tune: TuneConfig) -> list[Tu
     return finalists[: max(tune.finalize_top_n, 1)]
 
 
-def _finalize_runs(tune: TuneConfig, build: dict[str, Any], finalists: list[TuneRunRecord]) -> list[TuneRunRecord]:
+def _finalize_runs(
+    tune: TuneConfig,
+    build: dict[str, Any],
+    finalists: list[TuneRunRecord],
+    *,
+    table_name: str,
+) -> list[TuneRunRecord]:
     records: list[TuneRunRecord] = []
     for finalist in finalists:
         record = _run_benchmark(
@@ -375,6 +441,7 @@ def _finalize_runs(tune: TuneConfig, build: dict[str, Any], finalists: list[Tune
             drop_old=False,
             search_serial=True,
             search_concurrent=True,
+            table_name=table_name,
         )
         records.append(record)
     return records
@@ -478,6 +545,7 @@ def run_tuning(tune: TuneConfig, *, phase: str = "full") -> Path:
         build_suffix = f"b{build_idx}"
         original_label = tune.db_label
         tune.db_label = f"{original_label}-{build_suffix}"
+        build_table_name = _table_name_for_build(tune, build_idx)
 
         load_first = not tune.skip_load
         drop_old_first = not tune.skip_drop_old
@@ -493,6 +561,7 @@ def run_tuning(tune: TuneConfig, *, phase: str = "full") -> Path:
                 drop_old=True,
                 search_serial=False,
                 search_concurrent=False,
+                table_name=build_table_name,
             )
             all_records.append(load_record)
             load_first = False
@@ -505,6 +574,7 @@ def run_tuning(tune: TuneConfig, *, phase: str = "full") -> Path:
                 load_first=load_first,
                 drop_old_first=drop_old_first,
                 values=tune.search_top_size_values,
+                table_name=build_table_name,
             )
             all_records.extend(sweep_records)
 
@@ -521,11 +591,21 @@ def run_tuning(tune: TuneConfig, *, phase: str = "full") -> Path:
                     lo = below[-1][0]
                     hi = above[0][0]
                     if lo < hi:
-                        all_records.extend(_binary_search_top_size(tune, build, (lo, hi), tune.target_recall))
+                        all_records.extend(
+                            _binary_search_top_size(
+                                tune,
+                                build,
+                                (lo, hi),
+                                tune.target_recall,
+                                table_name=build_table_name,
+                            )
+                        )
 
         if phase in {"full", "finalize"}:
             finalists = _select_finalists(all_records, tune)
-            all_records.extend(_finalize_runs(tune, build, finalists))
+            all_records.extend(
+                _finalize_runs(tune, build, finalists, table_name=build_table_name)
+            )
 
         tune.db_label = original_label
 

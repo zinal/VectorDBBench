@@ -2,6 +2,7 @@ import logging
 import os
 import struct
 import time
+import uuid
 from contextlib import contextmanager
 from typing import Any
 
@@ -315,12 +316,26 @@ class YDB(VectorDB):
     def _index_on_sql(self) -> str:
         return ", ".join(self._resolved_index_on_columns())
 
+    def _drop_vector_indexes(self, pool) -> None:
+        """Drop final/temp vector indexes so rebuilds do not hit stale scheme paths."""
+        for index_name in (self.index_name, f"{self.index_name}__temp"):
+            try:
+                pool.execute_with_retries(
+                    f"ALTER TABLE `{self.table_name}` DROP INDEX `{index_name}`;",
+                    settings=self._operation_settings(self.db_config),
+                )
+                log.info("Dropped YDB vector index %s on %s", index_name, self.table_name)
+            except Exception as exc:
+                log.debug("Skip dropping YDB index %s on %s: %s", index_name, self.table_name, exc)
+
     def _add_vector_index(self, pool) -> None:
         import ydb
 
+        self._drop_vector_indexes(pool)
+
         index_param = self.case_config.index_param(self.filters, with_scalar_labels=self.with_scalar_labels)
         strategy = index_param["strategy"]
-        temp_index_name = f"{self.index_name}__temp"
+        temp_index_name = f"{self.index_name}__temp_{uuid.uuid4().hex[:8]}"
         on_sql = self._index_on_sql()
         cover_clause = index_param.get("cover_clause", "")
         cover_sql = f" {cover_clause}" if cover_clause else ""
