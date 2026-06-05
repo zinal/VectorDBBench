@@ -32,6 +32,7 @@ YDB_DEFAULT_OPERATION_TIMEOUT_SECONDS = 24 * 3600
 YDB_INDEX_IMPL_LEVEL_TABLE = "indexImplLevelTable"
 YDB_INDEX_IMPL_POSTING_TABLE = "indexImplPostingTable"
 YDB_INDEX_IMPL_PREFIX_TABLE = "indexImplPrefixTable"
+YDB_VECTOR_INDEX_NAME = "vector_idx"
 
 
 def convert_vector_to_bytes(vector: list[float]) -> bytes:
@@ -65,7 +66,7 @@ class YDB(VectorDB):
         self.db_config = db_config
         self.case_config = db_case_config
         self.table_name = collection_name
-        self.index_name = f"{collection_name}_vector_idx"
+        self.index_name = YDB_VECTOR_INDEX_NAME
         self.dim = dim
         self.filters = filters
         self.with_scalar_labels = with_scalar_labels or filters.type == FilterOp.StrEqual
@@ -316,9 +317,22 @@ class YDB(VectorDB):
     def _index_on_sql(self) -> str:
         return ", ".join(self._resolved_index_on_columns())
 
+    def _index_names_to_drop(self) -> tuple[str, ...]:
+        legacy_index_name = f"{self.table_name}_vector_idx"
+        return tuple(
+            dict.fromkeys(
+                (
+                    self.index_name,
+                    f"{self.index_name}__temp",
+                    legacy_index_name,
+                    f"{legacy_index_name}__temp",
+                ),
+            ),
+        )
+
     def _drop_vector_indexes(self, pool) -> None:
         """Drop final/temp vector indexes so rebuilds do not hit stale scheme paths."""
-        for index_name in (self.index_name, f"{self.index_name}__temp"):
+        for index_name in self._index_names_to_drop():
             try:
                 pool.execute_with_retries(
                     f"ALTER TABLE `{self.table_name}` DROP INDEX `{index_name}`;",
