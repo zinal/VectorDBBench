@@ -202,20 +202,40 @@ class TestYDBTableDDL:
 
         client.dim = 4
         client.driver = MagicMock()
-        client.driver._driver_config.database = "/local"
-        client.driver.table_client.alter_table = MagicMock()
         mock_ydb = MagicMock()
+        mock_ydb.RetrySettings = lambda **kwargs: kwargs
         with patch.dict(sys.modules, {"ydb": mock_ydb}), patch.object(
             YDB, "_operation_settings", return_value=MagicMock()
         ):
             client._add_vector_index(_Pool())
         return captured["query"]
 
-    def test_add_vector_index_uses_unique_temp_name(self):
+    def test_add_vector_index_uses_fixed_index_name(self):
         client = self._make_client()
         client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
         sql = self._capture_add_index_sql(client)
-        assert "ADD INDEX vector_idx__temp_" in sql
+        assert "ADD INDEX vector_idx" in sql
+        assert "__temp" not in sql
+
+    def test_add_vector_index_retries_on_path_exist(self):
+        client = self._make_client()
+        client.dim = 4
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        attempts = {"count": 0}
+
+        class _Pool:
+            def execute_with_retries(self, query, *args, **kwargs):
+                if "ADD INDEX" in query:
+                    attempts["count"] += 1
+                    if attempts["count"] == 1:
+                        raise RuntimeError("path exist for vector_idx")
+
+        with patch.object(YDB, "_operation_settings", return_value=MagicMock()), patch.object(
+            YDB, "_ddl_retry_settings", return_value=MagicMock()
+        ):
+            client._add_vector_index(_Pool())
+
+        assert attempts["count"] == 2
 
     def test_drop_vector_indexes_issues_drop_for_final_and_legacy_temp(self):
         client = self._make_client()

@@ -2,7 +2,6 @@ import logging
 import os
 import struct
 import time
-import uuid
 from contextlib import contextmanager
 from typing import Any
 
@@ -33,6 +32,7 @@ YDB_INDEX_IMPL_LEVEL_TABLE = "indexImplLevelTable"
 YDB_INDEX_IMPL_POSTING_TABLE = "indexImplPostingTable"
 YDB_INDEX_IMPL_PREFIX_TABLE = "indexImplPrefixTable"
 YDB_VECTOR_INDEX_NAME = "vector_idx"
+YDB_INDEX_BUILD_MAX_ATTEMPTS = 3
 
 
 def convert_vector_to_bytes(vector: list[float]) -> bytes:
@@ -330,26 +330,34 @@ class YDB(VectorDB):
             ),
         )
 
+    def _drop_index_if_exists(self, pool, index_name: str) -> None:
+        try:
+            pool.execute_with_retries(
+                f"ALTER TABLE `{self.table_name}` DROP INDEX `{index_name}`;",
+                settings=self._operation_settings(self.db_config),
+            )
+            log.info("Dropped YDB vector index %s on %s", index_name, self.table_name)
+        except Exception as exc:
+            log.debug("Skip dropping YDB index %s on %s: %s", index_name, self.table_name, exc)
+
     def _drop_vector_indexes(self, pool) -> None:
         """Drop final/temp vector indexes so rebuilds do not hit stale scheme paths."""
         for index_name in self._index_names_to_drop():
-            try:
-                pool.execute_with_retries(
-                    f"ALTER TABLE `{self.table_name}` DROP INDEX `{index_name}`;",
-                    settings=self._operation_settings(self.db_config),
-                )
-                log.info("Dropped YDB vector index %s on %s", index_name, self.table_name)
-            except Exception as exc:
-                log.debug("Skip dropping YDB index %s on %s: %s", index_name, self.table_name, exc)
+            self._drop_index_if_exists(pool, index_name)
 
-    def _add_vector_index(self, pool) -> None:
+    @staticmethod
+    def _is_index_path_exists_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return "path exist" in message or "already exists" in message
+
+    def _ddl_retry_settings(self):
         import ydb
 
-        self._drop_vector_indexes(pool)
+        return ydb.RetrySettings(max_retries=1)
 
+    def _build_vector_index_ddl(self, index_name: str) -> str:
         index_param = self.case_config.index_param(self.filters, with_scalar_labels=self.with_scalar_labels)
         strategy = index_param["strategy"]
-        temp_index_name = f"{self.index_name}__temp_{uuid.uuid4().hex[:8]}"
         on_sql = self._index_on_sql()
         cover_clause = index_param.get("cover_clause", "")
         cover_sql = f" {cover_clause}" if cover_clause else ""
@@ -363,11 +371,9 @@ class YDB(VectorDB):
             ",\n                " + ",\n                ".join(kmeans_options) if kmeans_options else ""
         )
 
-        ddl_settings = self._operation_settings(self.db_config)
-        pool.execute_with_retries(
-            f"""
+        return f"""
             ALTER TABLE `{self.table_name}`
-            ADD INDEX {temp_index_name}
+            ADD INDEX {index_name}
             GLOBAL USING vector_kmeans_tree
             ON ({on_sql}){cover_sql}
             WITH (
@@ -375,30 +381,57 @@ class YDB(VectorDB):
                 vector_type="float",
                 vector_dimension={self.dim}{kmeans_options_sql}
             );
-            """,
+            """
+
+    def _create_vector_index(self, pool, index_name: str) -> None:
+        ddl_settings = self._operation_settings(self.db_config)
+        pool.execute_with_retries(
+            self._build_vector_index_ddl(index_name),
             settings=ddl_settings,
+            retry_settings=self._ddl_retry_settings(),
         )
 
-        table_path = f"{self.driver._driver_config.database}/{self.table_name}"
-        self.driver.table_client.alter_table(
-            table_path,
-            rename_indexes=[
-                ydb.RenameIndexItem(
-                    source_name=temp_index_name,
-                    destination_name=self.index_name,
-                    replace_destination=True,
-                ),
-            ],
-            settings=ddl_settings,
-        )
-        log.info(
-            "Created vector index %s on %s ON (%s)%s (kmeans_tree options: %s)",
-            self.index_name,
-            self.table_name,
-            on_sql,
-            cover_sql,
-            ", ".join(kmeans_options) if kmeans_options else "server defaults",
-        )
+    def _add_vector_index(self, pool) -> None:
+        index_param = self.case_config.index_param(self.filters, with_scalar_labels=self.with_scalar_labels)
+        on_sql = self._index_on_sql()
+        cover_clause = index_param.get("cover_clause", "")
+        cover_sql = f" {cover_clause}" if cover_clause else ""
+        kmeans_options: list[str] = []
+        for key in ("levels", "clusters", "overlap_clusters"):
+            value = index_param.get(key)
+            if value is not None:
+                kmeans_options.append(f"{key}={value}")
+
+        last_error: Exception | None = None
+        for attempt in range(1, YDB_INDEX_BUILD_MAX_ATTEMPTS + 1):
+            self._drop_vector_indexes(pool)
+            try:
+                self._create_vector_index(pool, self.index_name)
+                log.info(
+                    "Created vector index %s on %s ON (%s)%s (kmeans_tree options: %s)",
+                    self.index_name,
+                    self.table_name,
+                    on_sql,
+                    cover_sql,
+                    ", ".join(kmeans_options) if kmeans_options else "server defaults",
+                )
+                return
+            except Exception as exc:
+                last_error = exc
+                if self._is_index_path_exists_error(exc) and attempt < YDB_INDEX_BUILD_MAX_ATTEMPTS:
+                    log.warning(
+                        "YDB index path already exists for %s on %s, retrying (%s/%s): %s",
+                        self.index_name,
+                        self.table_name,
+                        attempt,
+                        YDB_INDEX_BUILD_MAX_ATTEMPTS,
+                        exc,
+                    )
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
 
     def _wait_for_index(self, pool) -> None:
         import ydb
