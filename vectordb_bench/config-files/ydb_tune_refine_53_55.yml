@@ -1,0 +1,26 @@
+# Refinement sweep: KMeansTreeSearchTopSize 52–56 (focus 53–55)
+# Reuses existing table/index — no reload.
+#
+#   ./Tune.sh --config-file ydb_tune_refine_53_55.yml \
+#     --table-name performance768d1m \
+#     --phase search-sweep
+
+case_type: Performance768D1M
+task_label: ydb_tune_r90_refine
+db_label: ydb-r90-refine
+
+target_recall: 0.90
+min_recall: 0.90
+
+# Anchors 52/56 bracket the unknown 53–55; include all five in one serial pass
+search_top_size_values: [52, 53, 54, 55, 56]
+
+index_build_grid:
+  - overlap_clusters: 4
+
+cover_embedding: true
+finalize_top_n: 2
+
+output_dir: ./ydb_tune_results
+
+extra_cli_args: []
