@@ -9,8 +9,10 @@ from vectordb_bench.backend.clients.ydb.tune import (
     TuneRunRecord,
     _build_cli_args,
     _case_id,
+    _ensure_benchmark_succeeded,
     _recommend,
     _select_finalists,
+    _table_name_for_build,
 )
 
 
@@ -34,14 +36,82 @@ def test_build_cli_args_skip_load():
         drop_old=False,
         search_serial=True,
         search_concurrent=False,
+        table_name="performance768d1m_b1",
     )
     assert "--skip-load" in args
     assert "--skip-drop-old" in args
     assert "--search-serial" in args
     assert "--skip-search-concurrent" in args
+    assert "--table-name" in args
+    assert args[args.index("--table-name") + 1] == "performance768d1m_b1"
     assert "--kmeans-tree-search-top-size" in args
     idx = args.index("--kmeans-tree-search-top-size")
     assert args[idx + 1] == "20"
+
+
+def test_table_name_for_build_is_unique_per_grid_entry():
+    tune = TuneConfig(case_type="Performance768D1M")
+    assert _table_name_for_build(tune, 0) == "performance768d1m_b0"
+    assert _table_name_for_build(tune, 2) == "performance768d1m_b2"
+
+
+def test_table_name_for_build_respects_explicit_override():
+    tune = TuneConfig(case_type="Performance768D1M", table_name="fixed_table")
+    assert _table_name_for_build(tune, 3) == "fixed_table"
+
+
+def test_ensure_benchmark_succeeded_rejects_failed_label(tmp_path):
+    result_file = tmp_path / "result_test.json"
+    result_file.write_text(
+        """
+        {
+          "results": [
+            {
+              "label": "x",
+              "metrics": {"load_duration": 0.0},
+              "task_config": {
+                "db_config": {"db_label": "ydb-b2-loaded"},
+                "case_config": {"case_id": 5}
+              }
+            }
+          ]
+        }
+        """
+    )
+    with pytest.raises(RuntimeError, match="failed with label='x'"):
+        _ensure_benchmark_succeeded(
+            result_file,
+            case_type="Performance768D1M",
+            db_label="ydb-b2-loaded",
+            phase="load",
+        )
+
+
+def test_ensure_benchmark_succeeded_requires_load_duration(tmp_path):
+    result_file = tmp_path / "result_test.json"
+    result_file.write_text(
+        """
+        {
+          "results": [
+            {
+              "label": ":)",
+              "metrics": {"load_duration": 0.0},
+              "task_config": {
+                "db_config": {"db_label": "ydb-b2-loaded"},
+                "case_config": {"case_id": 5}
+              }
+            }
+          ]
+        }
+        """
+    )
+    with pytest.raises(RuntimeError, match="Load phase for ydb-b2-loaded did not complete"):
+        _ensure_benchmark_succeeded(
+            result_file,
+            case_type="Performance768D1M",
+            db_label="ydb-b2-loaded",
+            phase="load",
+        )
 
 
 def test_select_finalists_prefers_target_recall():

@@ -191,19 +191,46 @@ class TestYDBTableDDL:
         assert "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = 1000" in settings
 
     def _capture_add_index_sql(self, client: YDB) -> str:
+        import sys
+
         captured: dict[str, str] = {}
 
         class _Pool:
             def execute_with_retries(self, query, *args, **kwargs):
-                captured["query"] = query
+                if "ADD INDEX" in query:
+                    captured["query"] = query
 
         client.dim = 4
         client.driver = MagicMock()
         client.driver._driver_config.database = "/local"
         client.driver.table_client.alter_table = MagicMock()
-        with patch("ydb.RenameIndexItem"):
+        mock_ydb = MagicMock()
+        with patch.dict(sys.modules, {"ydb": mock_ydb}), patch.object(
+            YDB, "_operation_settings", return_value=MagicMock()
+        ):
             client._add_vector_index(_Pool())
         return captured["query"]
+
+    def test_add_vector_index_uses_unique_temp_name(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        sql = self._capture_add_index_sql(client)
+        assert "ADD INDEX bench_table_vector_idx__temp_" in sql
+
+    def test_drop_vector_indexes_issues_drop_for_final_and_legacy_temp(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        queries: list[str] = []
+
+        class _Pool:
+            def execute_with_retries(self, query, *args, **kwargs):
+                queries.append(query)
+
+        with patch.object(YDB, "_operation_settings", return_value=MagicMock()):
+            client._drop_vector_indexes(_Pool())
+        assert len(queries) == 2
+        assert "DROP INDEX `bench_table_vector_idx`" in queries[0]
+        assert "DROP INDEX `bench_table_vector_idx__temp`" in queries[1]
 
     def test_add_vector_index_omits_unset_kmeans_options(self):
         client = self._make_client()
