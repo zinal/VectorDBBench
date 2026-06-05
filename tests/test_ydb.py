@@ -391,6 +391,41 @@ class TestYDBFilters:
         assert FilterOp.StrEqual in YDB.supported_filter_types
 
 
+class TestYDBPickle:
+    def _make_client(self) -> YDB:
+        client = YDB.__new__(YDB)
+        client.name = "YDB"
+        client.db_config = YDBConfig().to_dict()
+        client.case_config = YDBIndexConfig()
+        client.table_name = "bench_table"
+        client.index_name = "bench_table_vector_idx"
+        client.dim = 768
+        client.filters = non_filter
+        client.with_scalar_labels = False
+        client._where_clause = ""
+        client._label_filter_value = None
+        client._index_ready = False
+        client.driver = object()
+        client.pool = object()
+        return client
+
+    def test_db_picklable_without_live_session(self):
+        import pickle
+
+        client = self._make_client()
+        restored = pickle.loads(pickle.dumps(client))  # noqa: S301
+        assert restored.driver is None
+        assert restored.pool is None
+        assert restored.dim == 768
+        assert restored.table_name == "bench_table"
+
+    def test_getstate_strips_live_session(self):
+        client = self._make_client()
+        state = client.__getstate__()
+        assert state["driver"] is None
+        assert state["pool"] is None
+
+
 @pytest.mark.integration
 class TestYDBClient:
     @pytest.fixture

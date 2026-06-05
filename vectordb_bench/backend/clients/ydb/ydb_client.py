@@ -80,6 +80,19 @@ class YDB(VectorDB):
                 self._drop_table(pool)
                 self._create_table(pool)
 
+    def __getstate__(self) -> dict[str, Any]:
+        # YDB driver/session pool hold gRPC/protobuf objects that cannot be pickled.
+        # ProcessPoolExecutor(spawn) sends the DB wrapper to load/optimize subprocesses.
+        state = self.__dict__.copy()
+        state["driver"] = None
+        state["pool"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.driver = None
+        self.pool = None
+
     @staticmethod
     def _resolve_login(db_config: dict) -> tuple[str, str]:
         user = db_config.get("user") or os.environ.get(YDB_USER_ENV, "")

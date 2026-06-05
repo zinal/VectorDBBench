@@ -1,6 +1,7 @@
 import concurrent
 import hashlib
 import logging
+import multiprocessing as mp
 import re
 import time
 import traceback
@@ -26,6 +27,16 @@ from .runner import (
 from .utils import kill_proc_tree
 
 log = logging.getLogger(__name__)
+
+
+@utils.time_it
+def _optimize_db_worker(db: api.VectorDB, data_size: int) -> None:
+    """Run optimize in a subprocess with only picklable DB state."""
+    with db.init():
+        try:
+            db.optimize(data_size=data_size)
+        except Exception as e:
+            raise RuntimeError(f"{type(e).__name__}: {e}") from None
 
 
 class RunningStatus(Enum):
@@ -502,14 +513,12 @@ class CaseRunner(BaseModel):
         finally:
             self.stop()
 
-    @utils.time_it
-    def _optimize_task(self) -> None:
-        with self.db.init():
-            self.db.optimize(data_size=self.ca.dataset.data.size)
-
     def _optimize(self) -> float:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._optimize_task)
+        with concurrent.futures.ProcessPoolExecutor(
+            mp_context=mp.get_context("spawn"),
+            max_workers=1,
+        ) as executor:
+            future = executor.submit(_optimize_db_worker, self.db, self.ca.dataset.data.size)
             try:
                 return future.result(timeout=self.ca.optimize_timeout)[1]
             except TimeoutError as e:
