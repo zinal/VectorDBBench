@@ -33,6 +33,8 @@ YDB_INDEX_IMPL_LEVEL_TABLE = "indexImplLevelTable"
 YDB_INDEX_IMPL_POSTING_TABLE = "indexImplPostingTable"
 YDB_INDEX_IMPL_PREFIX_TABLE = "indexImplPrefixTable"
 YDB_VECTOR_INDEX_NAME = "vector_idx"
+YDB_TRANSIENT_OP_MAX_ATTEMPTS = 5
+YDB_TRANSIENT_OP_BACKOFF_SECONDS = 5
 
 
 def convert_vector_to_bytes(vector: list[float]) -> bytes:
@@ -213,21 +215,40 @@ class YDB(VectorDB):
 
     @contextmanager
     def init(self):
+        self._open_connection()
+        try:
+            yield
+        finally:
+            self._close_connection()
+
+    def _open_connection(self) -> None:
         import ydb
+
+        if self.pool is not None:
+            return
 
         credentials = self._build_credentials(self.db_config)
         self.driver = ydb.Driver(driver_config=self._driver_config(self.db_config, credentials))
         self._wait_for_driver(self.driver, context="client init")
         self.pool = ydb.QuerySessionPool(self.driver)
-        try:
-            yield
-        finally:
-            if self.pool is not None:
+
+    def _close_connection(self) -> None:
+        if self.pool is not None:
+            try:
                 self.pool.stop()
-                self.pool = None
-            if self.driver is not None:
+            except Exception as exc:
+                log.debug("Error stopping YDB session pool: %s", exc)
+            self.pool = None
+        if self.driver is not None:
+            try:
                 self.driver.stop()
-                self.driver = None
+            except Exception as exc:
+                log.debug("Error stopping YDB driver: %s", exc)
+            self.driver = None
+
+    def _reconnect(self) -> None:
+        self._close_connection()
+        self._open_connection()
 
     def _drop_table(self, pool) -> None:
         pool.execute_with_retries(
@@ -287,16 +308,32 @@ class YDB(VectorDB):
     def _configure_index_table_partitioning(self, pool) -> None:
         settings_sql = self._index_partitioning_settings_sql()
         for table_path in self._index_impl_table_paths():
-            pool.execute_with_retries(
-                f"""
-                ALTER TABLE `{table_path}`
-                SET (
-                    {settings_sql}
-                );
-                """,
-                settings=self._operation_settings(self.db_config),
-            )
-            log.info("Configured auto partitioning for YDB index table %s", table_path)
+            for attempt in range(1, YDB_TRANSIENT_OP_MAX_ATTEMPTS + 1):
+                try:
+                    self.pool.execute_with_retries(
+                        f"""
+                        ALTER TABLE `{table_path}`
+                        SET (
+                            {settings_sql}
+                        );
+                        """,
+                        settings=self._operation_settings(self.db_config),
+                    )
+                    log.info("Configured auto partitioning for YDB index table %s", table_path)
+                    break
+                except Exception as exc:
+                    if self._is_transient_ydb_error(exc) and attempt < YDB_TRANSIENT_OP_MAX_ATTEMPTS:
+                        log.warning(
+                            "Transient YDB error configuring index table %s (%s/%s): %s",
+                            table_path,
+                            attempt,
+                            YDB_TRANSIENT_OP_MAX_ATTEMPTS,
+                            exc,
+                        )
+                        time.sleep(YDB_TRANSIENT_OP_BACKOFF_SECONDS)
+                        self._reconnect()
+                        continue
+                    raise
 
     def _create_table(self, pool) -> None:
         label_column = f",\n                {YDB_LABEL_FIELD} Utf8" if self.with_scalar_labels else ""
@@ -357,6 +394,31 @@ class YDB(VectorDB):
     def _is_index_path_exists_error(exc: Exception) -> bool:
         message = str(exc).lower()
         return "path exist" in message or "already exists" in message
+
+    @staticmethod
+    def _is_transient_ydb_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        exc_name = type(exc).__name__.lower()
+        markers = (
+            "unavailable",
+            "connection to tablet was lost",
+            "connection reset",
+            "connection refused",
+            "transport",
+            "deadline exceeded",
+            "socket",
+            "broken pipe",
+            "server overload",
+            "cluster discovery",
+            "400050",
+        )
+        if any(marker in message for marker in markers):
+            return True
+        return "unavailable" in exc_name or "timeout" in exc_name
+
+    @classmethod
+    def _is_index_build_in_progress_error(cls, exc: Exception) -> bool:
+        return cls._is_index_path_exists_error(exc) or cls._is_transient_ydb_error(exc)
 
     def _ddl_retry_settings(self):
         import ydb
@@ -420,13 +482,18 @@ class YDB(VectorDB):
         params = {"$embedding": (probe_vector, ydb.PrimitiveType.String)}
         return query, params
 
-    def _try_index_search(self, pool) -> bool:
+    def _probe_index_status(self, pool) -> str:
         query, params = self._index_probe_query()
         try:
             pool.execute_with_retries(query, params)
-            return True
-        except Exception:
-            return False
+            return "ready"
+        except Exception as exc:
+            if self._is_transient_ydb_error(exc):
+                return "connection_error"
+            return "building"
+
+    def _try_index_search(self, pool) -> bool:
+        return self._probe_index_status(pool) == "ready"
 
     def _add_vector_index(self, pool) -> None:
         if self._try_index_search(pool):
@@ -460,13 +527,15 @@ class YDB(VectorDB):
                 ", ".join(kmeans_options) if kmeans_options else "server defaults",
             )
         except Exception as exc:
-            if self._is_index_path_exists_error(exc):
+            if self._is_index_build_in_progress_error(exc):
                 log.warning(
-                    "YDB index path already exists for %s on %s; waiting for build instead of retrying ADD INDEX: %s",
+                    "YDB index build may still be in progress for %s on %s; waiting instead of failing: %s",
                     self.index_name,
                     self.table_name,
                     exc,
                 )
+                if self._is_transient_ydb_error(exc):
+                    self._reconnect()
                 return
             raise
 
@@ -476,11 +545,20 @@ class YDB(VectorDB):
 
         deadline = time.monotonic() + YDB_INDEX_WAIT_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            if self._try_index_search(pool):
+            active_pool = getattr(self, "pool", None) or pool
+            status = self._probe_index_status(active_pool)
+            if status == "ready":
                 self._index_ready = True
                 log.info("Vector index %s is ready", self.index_name)
                 return
-            log.info("Waiting for vector index %s to become searchable", self.index_name)
+            if status == "connection_error":
+                log.warning(
+                    "Lost YDB connection while waiting for vector index %s; reconnecting",
+                    self.index_name,
+                )
+                self._reconnect()
+            else:
+                log.info("Waiting for vector index %s to become searchable", self.index_name)
             time.sleep(YDB_INDEX_WAIT_POLL_SECONDS)
 
         msg = f"Timed out waiting for YDB vector index {self.index_name} after {YDB_INDEX_WAIT_TIMEOUT_SECONDS}s"

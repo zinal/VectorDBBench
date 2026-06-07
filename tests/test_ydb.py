@@ -236,6 +236,48 @@ class TestYDBTableDDL:
 
         assert attempts["count"] == 1
 
+    def test_add_vector_index_treats_transient_error_as_build_in_progress(self):
+        client = self._make_client()
+        client.dim = 4
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        attempts = {"count": 0}
+
+        class _Pool:
+            def execute_with_retries(self, query, *args, **kwargs):
+                if "ADD INDEX" in query:
+                    attempts["count"] += 1
+                    raise RuntimeError(
+                        'Unavailable: message: "Connection to tablet was lost." severity: 1 (server_code: 400050)'
+                    )
+
+        with patch.object(YDB, "_operation_settings", return_value=MagicMock()), patch.object(
+            YDB, "_try_index_search", return_value=False
+        ), patch.object(YDB, "_drop_vector_indexes"), patch.object(YDB, "_reconnect") as mock_reconnect:
+            client._add_vector_index(_Pool())
+
+        assert attempts["count"] == 1
+        mock_reconnect.assert_called_once()
+
+    def test_is_transient_ydb_error_detects_tablet_connection_loss(self):
+        exc = RuntimeError('Unavailable: message: "Connection to tablet was lost." severity: 1 (server_code: 400050)')
+        assert YDB._is_transient_ydb_error(exc) is True
+        assert YDB._is_index_build_in_progress_error(exc) is True
+
+    def test_wait_for_index_reconnects_on_transient_probe_errors(self):
+        client = self._make_client()
+        client.dim = 4
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        client._index_ready = False
+        statuses = iter(["connection_error", "ready"])
+
+        with patch.object(YDB, "_probe_index_status", side_effect=lambda pool: next(statuses)), patch.object(
+            YDB, "_reconnect"
+        ) as mock_reconnect, patch("vectordb_bench.backend.clients.ydb.ydb_client.time.sleep"):
+            client._wait_for_index(MagicMock())
+
+        assert client._index_ready is True
+        mock_reconnect.assert_called_once()
+
     def test_add_vector_index_skips_create_when_already_searchable(self):
         client = self._make_client()
         client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
