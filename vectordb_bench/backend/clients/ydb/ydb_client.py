@@ -32,7 +32,6 @@ YDB_INDEX_IMPL_LEVEL_TABLE = "indexImplLevelTable"
 YDB_INDEX_IMPL_POSTING_TABLE = "indexImplPostingTable"
 YDB_INDEX_IMPL_PREFIX_TABLE = "indexImplPrefixTable"
 YDB_VECTOR_INDEX_NAME = "vector_idx"
-YDB_INDEX_BUILD_MAX_ATTEMPTS = 3
 
 
 def convert_vector_to_bytes(vector: list[float]) -> bytes:
@@ -353,7 +352,9 @@ class YDB(VectorDB):
     def _ddl_retry_settings(self):
         import ydb
 
-        return ydb.RetrySettings(max_retries=1)
+        # ADD INDEX must not be retried internally: a successful first attempt creates
+        # the scheme path immediately, and a transparent retry fails with "path exist".
+        return ydb.RetrySettings(max_retries=0)
 
     def _build_vector_index_ddl(self, index_name: str) -> str:
         index_param = self.case_config.index_param(self.filters, with_scalar_labels=self.with_scalar_labels)
@@ -391,56 +392,13 @@ class YDB(VectorDB):
             retry_settings=self._ddl_retry_settings(),
         )
 
-    def _add_vector_index(self, pool) -> None:
-        index_param = self.case_config.index_param(self.filters, with_scalar_labels=self.with_scalar_labels)
-        on_sql = self._index_on_sql()
-        cover_clause = index_param.get("cover_clause", "")
-        cover_sql = f" {cover_clause}" if cover_clause else ""
-        kmeans_options: list[str] = []
-        for key in ("levels", "clusters", "overlap_clusters"):
-            value = index_param.get(key)
-            if value is not None:
-                kmeans_options.append(f"{key}={value}")
-
-        last_error: Exception | None = None
-        for attempt in range(1, YDB_INDEX_BUILD_MAX_ATTEMPTS + 1):
-            self._drop_vector_indexes(pool)
-            try:
-                self._create_vector_index(pool, self.index_name)
-                log.info(
-                    "Created vector index %s on %s ON (%s)%s (kmeans_tree options: %s)",
-                    self.index_name,
-                    self.table_name,
-                    on_sql,
-                    cover_sql,
-                    ", ".join(kmeans_options) if kmeans_options else "server defaults",
-                )
-                return
-            except Exception as exc:
-                last_error = exc
-                if self._is_index_path_exists_error(exc) and attempt < YDB_INDEX_BUILD_MAX_ATTEMPTS:
-                    log.warning(
-                        "YDB index path already exists for %s on %s, retrying (%s/%s): %s",
-                        self.index_name,
-                        self.table_name,
-                        attempt,
-                        YDB_INDEX_BUILD_MAX_ATTEMPTS,
-                        exc,
-                    )
-                    continue
-                raise
-
-        if last_error is not None:
-            raise last_error
-
-    def _wait_for_index(self, pool) -> None:
+    def _index_probe_query(self) -> tuple[str, dict]:
         import ydb
 
         search_param = self.case_config.search_param()
         knn_function = search_param["knn_function"]
         sort_order = search_param["sort_order"]
         probe_vector = convert_vector_to_bytes([0.0] * self.dim)
-        deadline = time.monotonic() + YDB_INDEX_WAIT_TIMEOUT_SECONDS
         query = f"""
         PRAGMA ydb.KMeansTreeSearchTopSize = "1";
         DECLARE $embedding AS String;
@@ -451,16 +409,70 @@ class YDB(VectorDB):
         LIMIT 1;
         """
         params = {"$embedding": (probe_vector, ydb.PrimitiveType.String)}
+        return query, params
 
+    def _try_index_search(self, pool) -> bool:
+        query, params = self._index_probe_query()
+        try:
+            pool.execute_with_retries(query, params)
+            return True
+        except Exception:
+            return False
+
+    def _add_vector_index(self, pool) -> None:
+        if self._try_index_search(pool):
+            self._index_ready = True
+            log.info(
+                "Vector index %s is already searchable on %s",
+                self.index_name,
+                self.table_name,
+            )
+            return
+
+        index_param = self.case_config.index_param(self.filters, with_scalar_labels=self.with_scalar_labels)
+        on_sql = self._index_on_sql()
+        cover_clause = index_param.get("cover_clause", "")
+        cover_sql = f" {cover_clause}" if cover_clause else ""
+        kmeans_options: list[str] = []
+        for key in ("levels", "clusters", "overlap_clusters"):
+            value = index_param.get(key)
+            if value is not None:
+                kmeans_options.append(f"{key}={value}")
+
+        self._drop_vector_indexes(pool)
+        try:
+            self._create_vector_index(pool, self.index_name)
+            log.info(
+                "Created vector index %s on %s ON (%s)%s (kmeans_tree options: %s)",
+                self.index_name,
+                self.table_name,
+                on_sql,
+                cover_sql,
+                ", ".join(kmeans_options) if kmeans_options else "server defaults",
+            )
+        except Exception as exc:
+            if self._is_index_path_exists_error(exc):
+                log.warning(
+                    "YDB index path already exists for %s on %s; waiting for build instead of retrying ADD INDEX: %s",
+                    self.index_name,
+                    self.table_name,
+                    exc,
+                )
+                return
+            raise
+
+    def _wait_for_index(self, pool) -> None:
+        if self._index_ready:
+            return
+
+        deadline = time.monotonic() + YDB_INDEX_WAIT_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            try:
-                pool.execute_with_retries(query, params)
+            if self._try_index_search(pool):
                 self._index_ready = True
                 log.info("Vector index %s is ready", self.index_name)
                 return
-            except Exception as exc:
-                log.info("Waiting for vector index %s: %s", self.index_name, exc)
-                time.sleep(YDB_INDEX_WAIT_POLL_SECONDS)
+            log.info("Waiting for vector index %s to become searchable", self.index_name)
+            time.sleep(YDB_INDEX_WAIT_POLL_SECONDS)
 
         msg = f"Timed out waiting for YDB vector index {self.index_name} after {YDB_INDEX_WAIT_TIMEOUT_SECONDS}s"
         raise TimeoutError(msg)
