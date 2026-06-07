@@ -252,11 +252,14 @@ class TestYDBTableDDL:
         assert client._index_ready is True
 
     def test_ddl_retry_settings_disable_internal_retries(self):
-        import ydb
-
         client = self._make_client()
         settings = client._ddl_retry_settings()
         assert settings.max_retries == 0
+
+    def test_driver_wait_timeout_is_extended(self):
+        from vectordb_bench.backend.clients.ydb.ydb_client import YDB_DRIVER_WAIT_SECONDS
+
+        assert YDB_DRIVER_WAIT_SECONDS >= 30
 
     def test_drop_vector_indexes_issues_drop_for_final_and_legacy_temp(self):
         client = self._make_client()

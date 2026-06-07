@@ -25,6 +25,7 @@ YDB_CREDENTIAL_ENV_KEYS = (
 YDB_LABEL_FIELD = "labels"
 YDB_INDEX_WAIT_POLL_SECONDS = 5
 YDB_INDEX_WAIT_TIMEOUT_SECONDS = 7200
+YDB_DRIVER_WAIT_SECONDS = 30
 YDB_DEFAULT_TABLE_PARTITION_SIZE_MB = 1000
 YDB_DEFAULT_INDEX_PARTITION_SIZE_MB = 1000
 YDB_DEFAULT_OPERATION_TIMEOUT_SECONDS = 24 * 3600
@@ -186,6 +187,14 @@ class YDB(VectorDB):
             .with_cancel_after(timeout)
         )
 
+    @staticmethod
+    def _wait_for_driver(driver, *, context: str) -> None:
+        try:
+            driver.wait(timeout=YDB_DRIVER_WAIT_SECONDS, fail_fast=True)
+        except TimeoutError as exc:
+            msg = f"YDB driver failed to connect within {YDB_DRIVER_WAIT_SECONDS}s ({context})"
+            raise TimeoutError(msg) from exc
+
     @contextmanager
     def _session_pool(self):
         import ydb
@@ -194,7 +203,7 @@ class YDB(VectorDB):
         driver = ydb.Driver(driver_config=self._driver_config(self.db_config, credentials))
         pool = None
         try:
-            driver.wait(timeout=5, fail_fast=True)
+            self._wait_for_driver(driver, context="session pool")
             pool = ydb.QuerySessionPool(driver)
             yield pool
         finally:
@@ -208,7 +217,7 @@ class YDB(VectorDB):
 
         credentials = self._build_credentials(self.db_config)
         self.driver = ydb.Driver(driver_config=self._driver_config(self.db_config, credentials))
-        self.driver.wait(timeout=5, fail_fast=True)
+        self._wait_for_driver(self.driver, context="client init")
         self.pool = ydb.QuerySessionPool(self.driver)
         try:
             yield
