@@ -206,7 +206,7 @@ class TestYDBTableDDL:
         mock_ydb.RetrySettings = lambda **kwargs: kwargs
         with patch.dict(sys.modules, {"ydb": mock_ydb}), patch.object(
             YDB, "_operation_settings", return_value=MagicMock()
-        ):
+        ), patch.object(YDB, "_try_index_search", return_value=False):
             client._add_vector_index(_Pool())
         return captured["query"]
 
@@ -217,7 +217,7 @@ class TestYDBTableDDL:
         assert "ADD INDEX vector_idx" in sql
         assert "__temp" not in sql
 
-    def test_add_vector_index_retries_on_path_exist(self):
+    def test_add_vector_index_treats_path_exist_as_build_in_progress(self):
         client = self._make_client()
         client.dim = 4
         client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
@@ -227,15 +227,36 @@ class TestYDBTableDDL:
             def execute_with_retries(self, query, *args, **kwargs):
                 if "ADD INDEX" in query:
                     attempts["count"] += 1
-                    if attempts["count"] == 1:
-                        raise RuntimeError("path exist for vector_idx")
+                    raise RuntimeError("path exist for vector_idx")
 
         with patch.object(YDB, "_operation_settings", return_value=MagicMock()), patch.object(
-            YDB, "_ddl_retry_settings", return_value=MagicMock()
-        ):
+            YDB, "_try_index_search", return_value=False
+        ), patch.object(YDB, "_drop_vector_indexes"):
             client._add_vector_index(_Pool())
 
-        assert attempts["count"] == 2
+        assert attempts["count"] == 1
+
+    def test_add_vector_index_skips_create_when_already_searchable(self):
+        client = self._make_client()
+        client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
+        attempts = {"count": 0}
+
+        class _Pool:
+            def execute_with_retries(self, query, *args, **kwargs):
+                attempts["count"] += 1
+
+        with patch.object(YDB, "_try_index_search", return_value=True):
+            client._add_vector_index(_Pool())
+
+        assert attempts["count"] == 0
+        assert client._index_ready is True
+
+    def test_ddl_retry_settings_disable_internal_retries(self):
+        import ydb
+
+        client = self._make_client()
+        settings = client._ddl_retry_settings()
+        assert settings.max_retries == 0
 
     def test_drop_vector_indexes_issues_drop_for_final_and_legacy_temp(self):
         client = self._make_client()
