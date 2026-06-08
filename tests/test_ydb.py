@@ -1,5 +1,6 @@
-from unittest.mock import MagicMock, patch
+import asyncio
 import os
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -88,6 +89,8 @@ class TestYDBConfig:
         assert cfg.auto_partitioning_index_partition_size_mb == 1000
         assert cfg.table_name == ""
         assert cfg.operation_timeout_seconds == 24 * 3600
+        assert cfg.bulk_upsert_batch_size == 1000
+        assert cfg.bulk_upsert_concurrency == 10
 
     def test_operation_settings_timeout(self):
         settings = YDB._operation_settings({"operation_timeout_seconds": 7200})
@@ -482,6 +485,60 @@ class TestYDBSSL:
             from_env.return_value = MagicMock()
             YDB._build_credentials({"auth_mode": "env", "user": "", "password": ""})
             from_env.assert_called_once_with()
+
+
+class TestYDBBulkUpsert:
+    def _make_client(self) -> YDB:
+        client = YDB.__new__(YDB)
+        client.db_config = YDBConfig(
+            database="/Root/test",
+            bulk_upsert_batch_size=2,
+            bulk_upsert_concurrency=2,
+        ).to_dict()
+        client.table_name = "bench_table"
+        client.with_scalar_labels = False
+        client.driver = None
+        return client
+
+    def test_table_path(self):
+        client = self._make_client()
+        assert client._table_path() == "/Root/test/bench_table"
+
+    def test_bulk_upsert_uses_async_api_with_concurrency(self, monkeypatch):
+        client = self._make_client()
+        concurrent = {"active": 0, "max": 0}
+        upsert_calls: list[int] = []
+
+        class FakeTableClient:
+            async def bulk_upsert(self, table_path, rows, column_types, settings=None):
+                concurrent["active"] += 1
+                concurrent["max"] = max(concurrent["max"], concurrent["active"])
+                upsert_calls.append(len(rows))
+                await asyncio.sleep(0.05)
+                concurrent["active"] -= 1
+
+        class FakeAioDriver:
+            table_client = FakeTableClient()
+
+            async def wait(self, timeout=5, fail_fast=True):
+                return None
+
+            async def stop(self):
+                return None
+
+        import ydb
+
+        monkeypatch.setattr(ydb.aio, "Driver", lambda **kwargs: FakeAioDriver())
+        monkeypatch.setattr(client, "_build_credentials", lambda _cfg: object())
+        monkeypatch.setattr(client, "_driver_config", lambda _cfg, _creds=None: object())
+
+        embeddings = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]]
+        inserted, err = client.insert_embeddings(embeddings=embeddings, metadata=[0, 1, 2, 3, 4])
+
+        assert err is None
+        assert inserted == 5
+        assert upsert_calls == [2, 2, 1]
+        assert concurrent["max"] >= 2
 
 
 class TestYDBFilters:

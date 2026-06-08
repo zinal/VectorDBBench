@@ -190,6 +190,26 @@ class YDBTypedDict(CommonTypedDict):
             help="YDB RPC/operation timeout for long DDL (ADD INDEX, ALTER TABLE, DROP TABLE)",
         ),
     ]
+    bulk_upsert_batch_size: Annotated[
+        int,
+        click.option(
+            "--bulk-upsert-batch-size",
+            type=int,
+            default=1000,
+            show_default=True,
+            help="Rows per BulkUpsert request during data load",
+        ),
+    ]
+    bulk_upsert_concurrency: Annotated[
+        int,
+        click.option(
+            "--bulk-upsert-concurrency",
+            type=int,
+            default=10,
+            show_default=True,
+            help="Maximum concurrent async BulkUpsert requests during data load",
+        ),
+    ]
 
 
 @cli.command()
@@ -217,6 +237,8 @@ def YDB(**parameters: Unpack[YDBTypedDict]):
             auto_partitioning_table_partition_size_mb=parameters["auto_partitioning_table_partition_size_mb"],
             auto_partitioning_index_partition_size_mb=parameters["auto_partitioning_index_partition_size_mb"],
             operation_timeout_seconds=parameters["operation_timeout_seconds"],
+            bulk_upsert_batch_size=parameters["bulk_upsert_batch_size"],
+            bulk_upsert_concurrency=parameters["bulk_upsert_concurrency"],
         ),
         db_case_config=YDBIndexConfig(
             levels=parameters["levels"],

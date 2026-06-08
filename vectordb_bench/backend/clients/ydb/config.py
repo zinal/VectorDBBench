@@ -22,6 +22,8 @@ class YDBConfigDict(TypedDict, total=False):
     auto_partitioning_table_partition_size_mb: int
     auto_partitioning_index_partition_size_mb: int
     operation_timeout_seconds: int
+    bulk_upsert_batch_size: int
+    bulk_upsert_concurrency: int
 
 
 class YDBConfig(DBConfig):
@@ -42,6 +44,8 @@ class YDBConfig(DBConfig):
     auto_partitioning_table_partition_size_mb: int = 1000
     auto_partitioning_index_partition_size_mb: int = 1000
     operation_timeout_seconds: int = 24 * 3600
+    bulk_upsert_batch_size: int = 1000
+    bulk_upsert_concurrency: int = 10
 
     @model_validator(mode="after")
     def validate_partition_bounds(self) -> "YDBConfig":
@@ -81,6 +85,8 @@ class YDBConfig(DBConfig):
             "auto_partitioning_table_partition_size_mb": self.auto_partitioning_table_partition_size_mb,
             "auto_partitioning_index_partition_size_mb": self.auto_partitioning_index_partition_size_mb,
             "operation_timeout_seconds": self.operation_timeout_seconds,
+            "bulk_upsert_batch_size": self.bulk_upsert_batch_size,
+            "bulk_upsert_concurrency": self.bulk_upsert_concurrency,
         }
         if self.table_name:
             result["table_name"] = self.table_name
