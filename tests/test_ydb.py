@@ -99,6 +99,29 @@ class TestYDBConfig:
         cfg = YDBConfig(table_name="")
         assert cfg.table_name == ""
 
+    def test_table_name_from_db_config_overrides_collection_name(self):
+        client = YDB(
+            dim=4,
+            db_config=YDBConfig(table_name="explicit_table").to_dict(),
+            db_case_config=YDBIndexConfig(),
+            collection_name="generated_name",
+            drop_old=False,
+        )
+        assert client.table_name == "explicit_table"
+
+    def test_collection_name_used_when_table_name_unset(self):
+        client = YDB(
+            dim=4,
+            db_config=YDBConfig().to_dict(),
+            db_case_config=YDBIndexConfig(),
+            collection_name="generated_name",
+            drop_old=False,
+        )
+        assert client.table_name == "generated_name"
+
+    def test_serial_search_in_process_flag(self):
+        assert YDB.serial_search_in_process is True
+
     def test_auto_partitioning_bounds_validation(self):
         with pytest.raises(ValueError, match="auto_partitioning_min_partitions_count"):
             YDBConfig(
