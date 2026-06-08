@@ -104,11 +104,11 @@ class YDBIndexConfig(BaseModel, DBCaseConfig):
     create_index_after_load: bool = True
     level: int | None = Field(default=None, alias="levels")
     nlist: int | None = Field(default=None, alias="clusters")
-    num_leaves_to_search: int = Field(default=10, alias="kmeans_tree_search_top_size")
-    overlap_clusters: int | None = None
+    num_leaves_to_search: int = Field(default=40, alias="kmeans_tree_search_top_size")
+    overlap_clusters: int | None = 3
     cover_embedding: bool = True
 
-    @field_validator("level", "nlist", "overlap_clusters", mode="before")
+    @field_validator("level", "nlist", mode="before")
     @classmethod
     def zero_means_auto(cls, value: int | None) -> int | None:
         if value == 0:
@@ -121,7 +121,7 @@ class YDBIndexConfig(BaseModel, DBCaseConfig):
         if not isinstance(data, dict):
             return data
         for key in ("level", "levels", "nlist", "clusters", "overlap_clusters"):
-            if data.get(key) in ("", None):
+            if key in data and data.get(key) in ("", 0, None):
                 data[key] = None
         return data
 

@@ -96,7 +96,7 @@ class YDBTypedDict(CommonTypedDict):
         click.option(
             "--kmeans-tree-search-top-size",
             type=int,
-            default=10,
+            default=40,
             show_default=True,
             help="PRAGMA ydb.KMeansTreeSearchTopSize for search completeness",
         ),
@@ -106,8 +106,9 @@ class YDBTypedDict(CommonTypedDict):
         click.option(
             "--overlap-clusters",
             type=int,
-            default=None,
-            help="vector_kmeans_tree overlap_clusters (omitted from DDL if not set; server default applies)",
+            default=3,
+            show_default=True,
+            help="vector_kmeans_tree overlap_clusters (0 = omit from DDL; server default applies)",
         ),
     ]
     cover_embedding: Annotated[

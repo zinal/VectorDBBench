@@ -29,7 +29,7 @@ class TestYDBConfig:
         params = cfg.index_param()
         assert params["levels"] is None
         assert params["clusters"] is None
-        assert params["overlap_clusters"] is None
+        assert params["overlap_clusters"] == 3
 
     def test_index_param_passes_explicit_values(self):
         cfg = YDBIndexConfig(levels=2, clusters=64, overlap_clusters=5)
@@ -53,8 +53,8 @@ class TestYDBConfig:
 
     def test_default_search_top_size(self):
         cfg = YDBIndexConfig()
-        assert cfg.num_leaves_to_search == 10
-        assert cfg.search_param()["kmeans_tree_search_top_size"] == 10
+        assert cfg.num_leaves_to_search == 40
+        assert cfg.search_param()["kmeans_tree_search_top_size"] == 40
 
     def test_index_on_columns(self):
         from vectordb_bench.backend.filter import IntFilter, LabelFilter, non_filter
@@ -325,8 +325,8 @@ class TestYDBTableDDL:
         client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
         sql = self._capture_add_index_sql(client)
         assert "levels=" not in sql
-        assert "clusters=" not in sql
-        assert "overlap_clusters=" not in sql
+        assert "\n                clusters=" not in sql
+        assert "overlap_clusters=3" in sql
         assert "vector_dimension=4" in sql
 
     def test_add_vector_index_includes_explicit_kmeans_options(self):
@@ -347,8 +347,8 @@ class TestYDBTableDDL:
         client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE, levels=3)
         sql = self._capture_add_index_sql(client)
         assert "levels=3" in sql
-        assert "clusters=" not in sql
-        assert "overlap_clusters=" not in sql
+        assert "\n                clusters=" not in sql
+        assert "overlap_clusters=3" in sql
 
 
 class TestYDBUIConfig:
@@ -367,8 +367,8 @@ class TestYDBUIConfig:
             for c in get_case_config_inputs(DB.YDB, CaseLabel.Performance)
         }
         inst = DB.YDB.case_config_cls(None)(**ui_cfg)
-        assert inst.overlap_clusters is None
-        assert inst.num_leaves_to_search == 10
+        assert inst.overlap_clusters == 3
+        assert inst.num_leaves_to_search == 40
         assert inst.level is None
         assert inst.nlist is None
 
