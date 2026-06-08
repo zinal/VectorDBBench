@@ -1,0 +1,25 @@
+# Single build variant: levels=3, clusters=512, overlap_clusters=4
+# First candidate to try — often enough to lower top_size vs server defaults.
+#
+#   ./Tune.sh --config-file ydb_tune_build_l3_c512.yml --target-recall 0.90
+
+case_type: Performance768D1M
+task_label: ydb_tune_r90_build
+db_label: ydb-r90-l3c512
+
+target_recall: 0.90
+min_recall: 0.90
+
+search_top_size_values: [1, 2, 3, 5, 8, 10, 15, 20, 32, 40, 48, 56, 64]
+
+index_build_grid:
+  - levels: 3
+    clusters: 512
+    overlap_clusters: 4
+
+cover_embedding: true
+finalize_top_n: 2
+
+output_dir: ./ydb_tune_results
+
+extra_cli_args: []
