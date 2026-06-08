@@ -53,6 +53,9 @@ class YDB(VectorDB):
     ]
     thread_safe = True
     serial_search_in_process = True
+    case_unique_collection_name = True
+    case_filters_at_init = True
+    optimize_via_picklable_worker = True
 
     def __init__(
         self,

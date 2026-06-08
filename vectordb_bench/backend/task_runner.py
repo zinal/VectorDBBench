@@ -139,7 +139,8 @@ class CaseRunner(BaseModel):
         )
 
     def _case_unique_collection_name(self) -> str | None:
-        if self.config.db not in (DB.Doris, DB.YDB):
+        db_cls = self.config.db.init_cls
+        if not getattr(db_cls, "case_unique_collection_name", False):
             return None
         case_type_name = self.config.case_config.case_id.name
         base = f"{case_type_name.lower()}"
@@ -195,7 +196,7 @@ class CaseRunner(BaseModel):
         if self.ca.is_multitenant:
             extra_db_kwargs["multitenant_tenant_labels"] = self.ca.tenant_labels()
 
-        if self.config.db == DB.YDB:
+        if getattr(db_cls, "case_filters_at_init", False):
             extra_db_kwargs["filters"] = self.ca.filters
 
         self.db = db_cls(
@@ -516,7 +517,7 @@ class CaseRunner(BaseModel):
             self.db.optimize(data_size=self.ca.dataset.data.size)
 
     def _optimize(self) -> float:
-        if self.config.db == DB.YDB:
+        if getattr(self.db, "optimize_via_picklable_worker", False):
             pool_kwargs: dict = {"mp_context": mp.get_context("spawn"), "max_workers": 1}
             submit = lambda executor: executor.submit(  # noqa: E731
                 _optimize_db_worker, self.db, self.ca.dataset.data.size

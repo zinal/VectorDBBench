@@ -119,8 +119,11 @@ class TestYDBConfig:
         )
         assert client.table_name == "generated_name"
 
-    def test_serial_search_in_process_flag(self):
+    def test_runner_capability_flags(self):
         assert YDB.serial_search_in_process is True
+        assert YDB.case_unique_collection_name is True
+        assert YDB.case_filters_at_init is True
+        assert YDB.optimize_via_picklable_worker is True
 
     def test_auto_partitioning_bounds_validation(self):
         with pytest.raises(ValueError, match="auto_partitioning_min_partitions_count"):
