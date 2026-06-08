@@ -52,6 +52,10 @@ class YDB(VectorDB):
         FilterOp.StrEqual,
     ]
     thread_safe = True
+    serial_search_in_process = True
+    case_unique_collection_name = True
+    case_filters_at_init = True
+    optimize_via_picklable_worker = True
 
     def __init__(
         self,
@@ -67,7 +71,8 @@ class YDB(VectorDB):
         self.name = "YDB"
         self.db_config = db_config
         self.case_config = db_case_config
-        self.table_name = collection_name
+        table_from_config = db_config.get("table_name") or ""
+        self.table_name = table_from_config or collection_name
         self.index_name = YDB_VECTOR_INDEX_NAME
         self.dim = dim
         self.filters = filters

@@ -29,7 +29,7 @@ class TestYDBConfig:
         params = cfg.index_param()
         assert params["levels"] is None
         assert params["clusters"] is None
-        assert params["overlap_clusters"] is None
+        assert params["overlap_clusters"] == 3
 
     def test_index_param_passes_explicit_values(self):
         cfg = YDBIndexConfig(levels=2, clusters=64, overlap_clusters=5)
@@ -53,8 +53,8 @@ class TestYDBConfig:
 
     def test_default_search_top_size(self):
         cfg = YDBIndexConfig()
-        assert cfg.num_leaves_to_search == 10
-        assert cfg.search_param()["kmeans_tree_search_top_size"] == 10
+        assert cfg.num_leaves_to_search == 40
+        assert cfg.search_param()["kmeans_tree_search_top_size"] == 40
 
     def test_index_on_columns(self):
         from vectordb_bench.backend.filter import IntFilter, LabelFilter, non_filter
@@ -98,6 +98,32 @@ class TestYDBConfig:
     def test_empty_table_name_allowed(self):
         cfg = YDBConfig(table_name="")
         assert cfg.table_name == ""
+
+    def test_table_name_from_db_config_overrides_collection_name(self):
+        client = YDB(
+            dim=4,
+            db_config=YDBConfig(table_name="explicit_table").to_dict(),
+            db_case_config=YDBIndexConfig(),
+            collection_name="generated_name",
+            drop_old=False,
+        )
+        assert client.table_name == "explicit_table"
+
+    def test_collection_name_used_when_table_name_unset(self):
+        client = YDB(
+            dim=4,
+            db_config=YDBConfig().to_dict(),
+            db_case_config=YDBIndexConfig(),
+            collection_name="generated_name",
+            drop_old=False,
+        )
+        assert client.table_name == "generated_name"
+
+    def test_runner_capability_flags(self):
+        assert YDB.serial_search_in_process is True
+        assert YDB.case_unique_collection_name is True
+        assert YDB.case_filters_at_init is True
+        assert YDB.optimize_via_picklable_worker is True
 
     def test_auto_partitioning_bounds_validation(self):
         with pytest.raises(ValueError, match="auto_partitioning_min_partitions_count"):
@@ -325,8 +351,8 @@ class TestYDBTableDDL:
         client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE)
         sql = self._capture_add_index_sql(client)
         assert "levels=" not in sql
-        assert "clusters=" not in sql
-        assert "overlap_clusters=" not in sql
+        assert "\n                clusters=" not in sql
+        assert "overlap_clusters=3" in sql
         assert "vector_dimension=4" in sql
 
     def test_add_vector_index_includes_explicit_kmeans_options(self):
@@ -347,8 +373,8 @@ class TestYDBTableDDL:
         client.case_config = YDBIndexConfig(metric_type=MetricType.COSINE, levels=3)
         sql = self._capture_add_index_sql(client)
         assert "levels=3" in sql
-        assert "clusters=" not in sql
-        assert "overlap_clusters=" not in sql
+        assert "\n                clusters=" not in sql
+        assert "overlap_clusters=3" in sql
 
 
 class TestYDBUIConfig:
@@ -367,8 +393,8 @@ class TestYDBUIConfig:
             for c in get_case_config_inputs(DB.YDB, CaseLabel.Performance)
         }
         inst = DB.YDB.case_config_cls(None)(**ui_cfg)
-        assert inst.overlap_clusters is None
-        assert inst.num_leaves_to_search == 10
+        assert inst.overlap_clusters == 3
+        assert inst.num_leaves_to_search == 40
         assert inst.level is None
         assert inst.nlist is None
 

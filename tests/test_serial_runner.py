@@ -7,8 +7,7 @@ from vectordb_bench.backend.filter import non_filter
 from vectordb_bench.backend.runner.serial_runner import SerialSearchRunner
 
 
-class _ThreadSafeDB:
-    thread_safe = True
+class _DefaultDB:
     name = "MockDB"
 
     def supports_payload_profile(self, payload_profile):
@@ -25,11 +24,11 @@ class _ThreadSafeDB:
         return [0]
 
 
-class _NotThreadSafeDB(_ThreadSafeDB):
-    thread_safe = False
+class _InProcessSerialSearchDB(_DefaultDB):
+    serial_search_in_process = True
 
 
-@pytest.mark.parametrize("db_cls", [_ThreadSafeDB, _NotThreadSafeDB])
+@pytest.mark.parametrize("db_cls", [_DefaultDB, _InProcessSerialSearchDB])
 def test_serial_search_runner_run(db_cls):
     runner = SerialSearchRunner(
         db=db_cls(),
@@ -45,9 +44,9 @@ def test_serial_search_runner_run(db_cls):
     assert p95 >= 0
 
 
-def test_serial_search_runs_in_process_when_thread_safe():
+def test_serial_search_runs_in_process_when_client_requests_it():
     runner = SerialSearchRunner(
-        db=_ThreadSafeDB(),
+        db=_InProcessSerialSearchDB(),
         test_data=[[0.1]],
         ground_truth=[[0]],
         k=1,
@@ -62,11 +61,9 @@ def test_serial_search_runs_in_process_when_thread_safe():
     assert result == (0.5, 0.5, 0.01, 0.02)
 
 
-def test_serial_search_uses_spawn_subprocess_when_not_thread_safe():
-    import multiprocessing as mp
-
+def test_serial_search_uses_subprocess_by_default():
     runner = SerialSearchRunner(
-        db=_NotThreadSafeDB(),
+        db=_DefaultDB(),
         test_data=[[0.1]],
         ground_truth=[[0]],
         k=1,
@@ -80,8 +77,5 @@ def test_serial_search_uses_spawn_subprocess_when_not_thread_safe():
 
         result, _ = runner.run()
 
-    mock_pool.assert_called_once_with(
-        mp_context=mp.get_context("spawn"),
-        max_workers=1,
-    )
+    mock_pool.assert_called_once_with(max_workers=1)
     assert result == (0.5, 0.5, 0.01, 0.02)

@@ -1760,8 +1760,8 @@ CaseConfigParamInput_NumLeavesToSearch_YDB = CaseConfigInput(
     inputType=InputType.Number,
     inputConfig={
         "min": 1,
-        "max": 32,
-        "value": 10,
+        "max": 64,
+        "value": 40,
     },
 )
 
@@ -1782,7 +1782,7 @@ CaseConfigParamInput_OverlapClusters_YDB = CaseConfigInput(
     inputConfig={
         "min": 0,
         "max": 32,
-        "value": 0,
+        "value": 3,
     },
 )
 

@@ -139,7 +139,8 @@ class CaseRunner(BaseModel):
         )
 
     def _case_unique_collection_name(self) -> str | None:
-        if self.config.db not in (DB.Doris, DB.YDB):
+        db_cls = self.config.db.init_cls
+        if not getattr(db_cls, "case_unique_collection_name", False):
             return None
         case_type_name = self.config.case_config.case_id.name
         base = f"{case_type_name.lower()}"
@@ -184,12 +185,8 @@ class CaseRunner(BaseModel):
             # If anything goes wrong, fall back silently; client will use its default name logic
             collection_name = None
 
-        db_config_dict = self.config.db_config.to_dict()
-        explicit_table_name = db_config_dict.pop("table_name", None) or None
-        if explicit_table_name:
-            collection_name = explicit_table_name
-
         # Check if collection_name is in the db_config (e.g., for Zilliz, Milvus)
+        db_config_dict = self.config.db_config.to_dict()
         if "collection_name" in db_config_dict and not collection_name:
             collection_name = db_config_dict.pop("collection_name")
 
@@ -199,7 +196,8 @@ class CaseRunner(BaseModel):
         if self.ca.is_multitenant:
             extra_db_kwargs["multitenant_tenant_labels"] = self.ca.tenant_labels()
 
-        extra_db_kwargs["filters"] = self.ca.filters
+        if getattr(db_cls, "case_filters_at_init", False):
+            extra_db_kwargs["filters"] = self.ca.filters
 
         self.db = db_cls(
             dim=self.ca.dataset.data.dim,
@@ -513,12 +511,23 @@ class CaseRunner(BaseModel):
         finally:
             self.stop()
 
+    @utils.time_it
+    def _optimize_task(self) -> None:
+        with self.db.init():
+            self.db.optimize(data_size=self.ca.dataset.data.size)
+
     def _optimize(self) -> float:
-        with concurrent.futures.ProcessPoolExecutor(
-            mp_context=mp.get_context("spawn"),
-            max_workers=1,
-        ) as executor:
-            future = executor.submit(_optimize_db_worker, self.db, self.ca.dataset.data.size)
+        if getattr(self.db, "optimize_via_picklable_worker", False):
+            pool_kwargs: dict = {"mp_context": mp.get_context("spawn"), "max_workers": 1}
+            submit = lambda executor: executor.submit(  # noqa: E731
+                _optimize_db_worker, self.db, self.ca.dataset.data.size
+            )
+        else:
+            pool_kwargs = {"max_workers": 1}
+            submit = lambda executor: executor.submit(self._optimize_task)  # noqa: E731
+
+        with concurrent.futures.ProcessPoolExecutor(**pool_kwargs) as executor:
+            future = submit(executor)
             try:
                 return future.result(timeout=self.ca.optimize_timeout)[1]
             except TimeoutError as e:
